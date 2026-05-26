@@ -761,8 +761,10 @@ def render_sidebar(positions, is_admin):
             new_cur = st.selectbox("Currency", ["EUR","USD","CHF","GBP"],
                                    index=["EUR","USD","CHF","GBP"].index(pos.get("currency","EUR")),
                                    key=f"cur_{ticker}")
-            if st.button("🗑 Remove", key=f"del_{ticker}"):
+            remove_clicked = st.button("🗑 Remove", key=f"del_{ticker}")
+            if remove_clicked:
                 del updated[ticker]
+                st.session_state["positions"] = updated
                 save_portfolio(updated)
                 st.rerun()
             else:
