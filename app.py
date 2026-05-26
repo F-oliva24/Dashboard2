@@ -34,6 +34,7 @@ st.set_page_config(
 BUDGET_DEFAULT    = 1450.0
 GUEST_HOURS       = 1
 PORTFOLIO_CACHE   = Path("last_portfolio.json")
+BUY_PRICES_FILE   = Path("buy_prices.json")
 
 # Known ISIN → Yahoo ticker + currency mapping
 ISIN_MAP = {
@@ -45,6 +46,18 @@ ISIN_MAP = {
     "IE00B52MJY50": {"ticker": "VUSA.AS", "currency": "USD", "name": "Vanguard S&P 500"},
     "IE00B3XXRP09": {"ticker": "VWRL.AS", "currency": "USD", "name": "Vanguard FTSE All-World Dist"},
 }
+
+def load_buy_prices() -> dict:
+    """Carica prezzi di carico manuali da file JSON."""
+    if BUY_PRICES_FILE.exists():
+        with open(BUY_PRICES_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_buy_prices(prices: dict) -> None:
+    """Salva prezzi di carico manuali su file JSON."""
+    with open(BUY_PRICES_FILE, "w") as f:
+        json.dump(prices, f, indent=2)
 
 # Vivid color palette
 C = {
@@ -511,19 +524,23 @@ def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
 # ------------------------------------------------------------------ #
 
 def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
-                   fx_rates: dict) -> tuple[pd.DataFrame, float]:
+                   fx_rates: dict, buy_prices: dict = None) -> tuple[pd.DataFrame, float]:
     """
     Calcola metriche portafoglio.
-    - degiro_price = prezzo di chiusura DEGIRO (usato come prezzo di carico)
-    - current_prices = prezzi live da yfinance
+    - buy_prices: dict {isin: prezzo_carico_manuale} — override manuale
+    - degiro_price: prezzo DEGIRO usato come fallback se no buy_price
+    - current_prices: prezzi live da yfinance
     - P&L calcolato in valuta originale
     - Valore totale in EUR
     """
+    if buy_prices is None:
+        buy_prices = {}
     rows = []
     total_value = 0.0
 
     for _, pos in positions_df.iterrows():
         ticker      = pos.get("ticker")
+        isin        = str(pos.get("isin",""))
         qty         = float(pos["qty"])
         degiro_px   = float(pos["degiro_price"]) if pd.notna(pos.get("degiro_price")) else 0
         currency    = pos.get("currency", "EUR")
@@ -532,7 +549,12 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
         deg_val_eur = pos.get("degiro_value_eur")
         deg_currency= pos.get("degiro_currency", currency)
 
-        cost_orig = qty * degiro_px
+        # Use manual buy price if available, otherwise DEGIRO price (fallback)
+        has_manual  = isin in buy_prices and buy_prices[isin] > 0
+        buy_px      = float(buy_prices[isin]) if has_manual else degiro_px
+        price_source= "Manual" if has_manual else "DEGIRO (fallback)"
+
+        cost_orig = qty * buy_px
         val_orig  = qty * curr_px if curr_px else None
         pl_orig   = (val_orig - cost_orig) if val_orig is not None else None
         pl_pct    = (pl_orig / cost_orig) if (pl_orig is not None and cost_orig > 0) else None
@@ -544,11 +566,13 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
         total_value += val_eur
 
         rows.append({
-            "Ticker":             ticker or pos.get("isin", "N/A"),
+            "Ticker":             ticker or isin or "N/A",
             "Name":               str(pos.get("yf_name", pos.get("name", ""))),
-            "ISIN":               str(pos.get("isin", "")),
+            "ISIN":               isin,
             "Currency":           deg_currency,
             "Qty":                qty,
+            "Buy Price":          f"{buy_px:.2f} {deg_currency}",
+            "Price Source":       price_source,
             "DEGIRO Price":       f"{degiro_px:.2f} {deg_currency}" if degiro_px else "N/A",
             "Current Price (YF)": f"{curr_px:.2f} {currency}" if curr_px else "N/A",
             "Value (orig)":       f"{val_orig:,.2f} {currency}" if val_orig else "N/A",
@@ -830,7 +854,44 @@ def page_portfolio(is_admin, budget):
         current_prices = fetch_current_prices(valid_tickers)
         fx_rates       = fetch_fx_rates()
 
-    pivot, total_value = calc_portfolio(positions_df, current_prices, fx_rates)
+    # Load buy prices
+    if "buy_prices" not in st.session_state:
+        st.session_state["buy_prices"] = load_buy_prices()
+    buy_prices = st.session_state["buy_prices"]
+
+    # Buy price editor
+    if is_admin:
+        section("Buy Prices (Manual Override)")
+        st.caption("Enter your actual average buy price for each position. "
+                   "Saved automatically. Used for P&L calculation.")
+        has_missing = any(
+            str(row.get("isin","")) not in buy_prices or buy_prices.get(str(row.get("isin","")),0) == 0
+            for _, row in positions_df.iterrows()
+        )
+        if has_missing:
+            st.warning("⚠️ Some positions are missing a manual buy price. "
+                       "P&L uses DEGIRO last price as fallback (not accurate).")
+
+        bp_cols = st.columns(min(len(positions_df), 3))
+        for i, (_, pos) in enumerate(positions_df.iterrows()):
+            isin     = str(pos.get("isin",""))
+            name     = str(pos.get("yf_name", pos.get("name","")))[:25]
+            currency = str(pos.get("degiro_currency", pos.get("currency","EUR")))
+            current_bp = float(buy_prices.get(isin, 0.0))
+            with bp_cols[i % len(bp_cols)]:
+                new_bp = st.number_input(
+                    f"{name} ({currency})",
+                    min_value=0.0, value=current_bp,
+                    step=0.01, format="%.4f",
+                    key=f"bp_{isin}",
+                    help=f"ISIN: {isin}"
+                )
+                if new_bp != current_bp:
+                    buy_prices[isin] = new_bp
+                    st.session_state["buy_prices"] = buy_prices
+                    save_buy_prices(buy_prices)
+
+    pivot, total_value = calc_portfolio(positions_df, current_prices, fx_rates, buy_prices)
     total_cost = pd.to_numeric(pivot["Cost (€)"], errors="coerce").sum()
     total_pl   = pd.to_numeric(pivot["P&L (€)"],  errors="coerce").sum()
     total_pl_pct = total_pl / total_cost if total_cost > 0 else 0
