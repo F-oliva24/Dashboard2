@@ -398,52 +398,88 @@ def fetch_dividends(tickers: tuple) -> dict:
 
 def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
     """
-    Parse DEGIRO portfolio CSV.
+    Parse DEGIRO portfolio CSV — keeps ALL columns.
     Returns (positions_df, unmapped_isins)
-    positions_df columns: ticker, name, isin, quantity, last_price, currency, value_eur
+
+    Columns preserved from CSV:
+        name          — full product name (Prodotto)
+        isin          — ISIN code (Codice)
+        qty           — quantity (Quantità)
+        degiro_price  — last price from DEGIRO (Ultimo)
+        degiro_currency — currency of the position
+        degiro_value  — local value (Valore)
+        degiro_value_eur — value in EUR from DEGIRO (Valore in EUR)
+
+    Added by app:
+        ticker        — Yahoo Finance ticker (from ISIN_MAP)
+        currency      — currency for yfinance pricing
+        yf_name       — friendly name from ISIN_MAP
     """
     try:
         df = pd.read_csv(uploaded_file)
         df.columns = [c.strip() for c in df.columns]
 
-        # Rename columns
+        # Rename all known DEGIRO columns (IT and EN)
         col_map = {
-            "Prodotto": "name", "Product": "name",
-            "Codice": "isin",   "Symbol/ISIN": "isin",
-            "Quantità": "qty",  "Quantity": "qty",
-            "Ultimo": "last_price", "Last": "last_price",
-            "Valore in EUR": "value_eur", "Value in EUR": "value_eur",
+            "Prodotto":       "name",
+            "Product":        "name",
+            "Codice":         "isin",
+            "Symbol/ISIN":    "isin",
+            "Quantità":       "qty",
+            "Quantity":       "qty",
+            "Ultimo":         "degiro_price",
+            "Last":           "degiro_price",
+            "Valore in EUR":  "degiro_value_eur",
+            "Value in EUR":   "degiro_value_eur",
         }
         df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
-        # Keep relevant columns
-        needed = ["name","isin","qty","last_price","value_eur"]
-        df = df[[c for c in needed if c in df.columns]].copy()
+        # Handle the unnamed currency column and value column
+        # DEGIRO CSV has: ..., Valore, <unnamed>, Valore in EUR
+        # The unnamed column is the currency, Valore is the local value
+        cols = df.columns.tolist()
+        unnamed = [c for c in cols if c.startswith("Unnamed")]
+        if unnamed:
+            df = df.rename(columns={unnamed[0]: "degiro_currency_raw"})
 
-        # Clean numeric columns
-        # qty: already integer in CSV — read directly without string manipulation
+        # Find Valore / Value column (local value before EUR conversion)
+        for c in cols:
+            if c in ["Valore", "Value", "Local value"] and c not in col_map:
+                df = df.rename(columns={c: "degiro_value_local"})
+                break
+
+        # Clean qty — read as-is, already integer
         if "qty" in df.columns:
             df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
 
-        # last_price and value_eur: use comma as decimal separator in DEGIRO CSV
-        for col in ["last_price", "value_eur"]:
+        # Clean price/value columns — comma decimal separator
+        def clean_num(series):
+            return pd.to_numeric(
+                series.astype(str)
+                      .str.replace('"', '', regex=False)
+                      .str.replace('€', '', regex=False)
+                      .str.strip()
+                      .str.replace(',', '.', regex=False),
+                errors="coerce"
+            )
+
+        for col in ["degiro_price","degiro_value_eur","degiro_value_local"]:
             if col in df.columns:
-                df[col] = pd.to_numeric(
-                    df[col].astype(str)
-                           .str.replace('"', '', regex=False)
-                           .str.replace("€", "", regex=False)
-                           .str.strip()
-                           .str.replace(r'(?<=\d)\.(?=\d{3})', '', regex=True)
-                           .str.replace(",", ".", regex=False),
-                    errors="coerce")
+                df[col] = clean_num(df[col])
+
+        # Extract currency from the raw currency column or from degiro_currency_raw
+        if "degiro_currency_raw" in df.columns:
+            df["degiro_currency"] = df["degiro_currency_raw"].astype(str).str.strip()
+        else:
+            df["degiro_currency"] = "EUR"
 
         # Drop cash rows and rows without ISIN
         df = df.dropna(subset=["isin"])
-        df = df[~df["isin"].str.upper().str.contains("CASH|FUND|FTX", na=False)]
+        df = df[~df["isin"].astype(str).str.upper().str.contains("CASH|FUND|FTX", na=False)]
         df = df[df["qty"].notna() & (df["qty"] > 0)]
         df = df.reset_index(drop=True)
 
-        # Map ISIN → ticker + currency
+        # Map ISIN → Yahoo ticker + currency
         unmapped = []
         tickers, currencies, yf_names = [], [], []
         for _, row in df.iterrows():
@@ -454,7 +490,7 @@ def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
                 yf_names.append(ISIN_MAP[isin]["name"])
             else:
                 tickers.append(None)
-                currencies.append("EUR")
+                currencies.append(str(row.get("degiro_currency","EUR")))
                 yf_names.append(str(row.get("name","")))
                 unmapped.append(isin)
 
@@ -466,6 +502,8 @@ def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
 
     except Exception as e:
         st.error(f"CSV parse error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return pd.DataFrame(), []
 
 # ------------------------------------------------------------------ #
@@ -475,22 +513,26 @@ def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
 def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
                    fx_rates: dict) -> tuple[pd.DataFrame, float]:
     """
-    positions_df must have: ticker, qty, last_price (buy price from CSV), currency, yf_name
-    P&L calculated in original currency.
-    EUR values for totals/charts.
+    Calcola metriche portafoglio.
+    - degiro_price = prezzo di chiusura DEGIRO (usato come prezzo di carico)
+    - current_prices = prezzi live da yfinance
+    - P&L calcolato in valuta originale
+    - Valore totale in EUR
     """
     rows = []
     total_value = 0.0
 
     for _, pos in positions_df.iterrows():
-        ticker   = pos.get("ticker")
-        qty      = float(pos["qty"])
-        buy_px   = float(pos["last_price"]) if pd.notna(pos.get("last_price")) else 0
-        currency = pos.get("currency", "EUR")
-        fx       = fx_rates.get(currency, 1.0)
-        curr_px  = current_prices.get(ticker) if ticker else None
+        ticker      = pos.get("ticker")
+        qty         = float(pos["qty"])
+        degiro_px   = float(pos["degiro_price"]) if pd.notna(pos.get("degiro_price")) else 0
+        currency    = pos.get("currency", "EUR")
+        fx          = fx_rates.get(currency, 1.0)
+        curr_px     = current_prices.get(ticker) if ticker else None
+        deg_val_eur = pos.get("degiro_value_eur")
+        deg_currency= pos.get("degiro_currency", currency)
 
-        cost_orig = qty * buy_px
+        cost_orig = qty * degiro_px
         val_orig  = qty * curr_px if curr_px else None
         pl_orig   = (val_orig - cost_orig) if val_orig is not None else None
         pl_pct    = (pl_orig / cost_orig) if (pl_orig is not None and cost_orig > 0) else None
@@ -502,25 +544,26 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
         total_value += val_eur
 
         rows.append({
-            "Ticker":        ticker or pos.get("isin", "N/A"),
-            "Name":          str(pos.get("yf_name", "")),
-            "Currency":      currency,
-            "Qty":           qty,
-            "Buy Price":     f"{buy_px:.2f} {currency}",
-            "Current Price": f"{curr_px:.2f} {currency}" if curr_px else "N/A",
-            "Cost":          f"{cost_orig:,.2f} {currency}",
-            "Value":         f"{val_orig:,.2f} {currency}" if val_orig else "N/A",
-            "P&L":           f"{pl_orig:+,.2f} {currency}" if pl_orig is not None else "N/A",
-            "P&L (%)":       pl_pct,
-            "Value (€)":     round(val_eur, 2),
-            "P&L (€)":       round(pl_eur, 2) if pl_eur is not None else None,
-            "Cost (€)":      round(cost_eur, 2),
-            "_val_orig":     val_orig,
-            "_pl_orig":      pl_orig,
+            "Ticker":             ticker or pos.get("isin", "N/A"),
+            "Name":               str(pos.get("yf_name", pos.get("name", ""))),
+            "ISIN":               str(pos.get("isin", "")),
+            "Currency":           deg_currency,
+            "Qty":                qty,
+            "DEGIRO Price":       f"{degiro_px:.2f} {deg_currency}" if degiro_px else "N/A",
+            "Current Price (YF)": f"{curr_px:.2f} {currency}" if curr_px else "N/A",
+            "Value (orig)":       f"{val_orig:,.2f} {currency}" if val_orig else "N/A",
+            "P&L (orig)":         f"{pl_orig:+,.2f} {currency}" if pl_orig is not None else "N/A",
+            "P&L (%)":            pl_pct,
+            "Value (€) YF":       round(val_eur, 2),
+            "Value (€) DEGIRO":   round(float(deg_val_eur), 2) if pd.notna(deg_val_eur) else None,
+            "P&L (€)":            round(pl_eur, 2) if pl_eur is not None else None,
+            "Cost (€)":           round(cost_eur, 2),
+            "_val_orig":          val_orig,
+            "_pl_orig":           pl_orig,
         })
 
     df = pd.DataFrame(rows).set_index("Ticker")
-    df["Weight"] = df["Value (€)"] / total_value if total_value > 0 else 0
+    df["Weight"] = df["Value (€) YF"] / total_value if total_value > 0 else 0
     return df, total_value
 
 def calc_risk(port_ret: pd.Series, total_value: float, conf=0.95, h=1) -> dict:
@@ -803,9 +846,13 @@ def page_portfolio(is_admin, budget):
 
     # Positions table
     section("Positions")
-    disp = pivot.drop(columns=["_val_orig","_pl_orig","Cost (€)","P&L (€)","Value (€)"], errors="ignore")
+    disp = pivot.drop(columns=["_val_orig","_pl_orig","Cost (€)","P&L (€)"], errors="ignore")
     disp["P&L (%)"] = disp["P&L (%)"].apply(lambda x: f"{x:+.2%}" if pd.notna(x) else "N/A")
     disp["Weight"]  = disp["Weight"].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "N/A")
+    # Format EUR columns
+    for col in ["Value (€) YF", "Value (€) DEGIRO", "P&L (€)", "Cost (€)"]:
+        if col in disp.columns:
+            disp[col] = disp[col].apply(lambda x: f"€{x:,.2f}" if pd.notna(x) else "N/A")
     st.dataframe(disp, use_container_width=True)
 
     # Charts
@@ -813,7 +860,7 @@ def page_portfolio(is_admin, budget):
     col_pie, col_alloc = st.columns(2)
 
     with col_pie:
-        vals = pd.to_numeric(pivot["Value (€)"], errors="coerce").fillna(0)
+        vals = pd.to_numeric(pivot["Value (€) YF"], errors="coerce").fillna(0)
         fig_pie = go.Figure(go.Pie(
             labels=pivot.index.tolist(), values=vals.tolist(), hole=0.45,
             textinfo="label+percent", textfont=dict(color=C["text"]),
@@ -864,8 +911,8 @@ def page_portfolio(is_admin, budget):
     prices_ptf = fetch_prices(valid_tickers, "3y")
     valid_t    = [t for t in valid_tickers if t in prices_ptf.columns]
     if valid_t:
-        w_raw  = {t: float(pivot.loc[t,"Value (€)"]) for t in valid_t
-                  if t in pivot.index and pd.notna(pivot.loc[t,"Value (€)"])}
+        w_raw  = {t: float(pivot.loc[t,"Value (€) YF"]) for t in valid_t
+                  if t in pivot.index and pd.notna(pivot.loc[t,"Value (€) YF"])}
         w_tot  = sum(w_raw.values())
         w_norm = {t:v/w_tot for t,v in w_raw.items()} if w_tot>0 else {}
         if w_norm:
