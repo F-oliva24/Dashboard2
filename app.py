@@ -753,6 +753,7 @@ def render_sidebar(positions, is_admin):
     for ticker in list(updated.keys()):
         with st.sidebar.expander(f"✏️ {ticker}"):
             pos     = updated[ticker]
+            new_ticker = st.text_input("Ticker", value=ticker, key=f"tick_{ticker}").upper().strip()
             new_qty = st.number_input("Quantity", min_value=0.0, value=float(pos["quantity"]),
                                       step=0.5, key=f"qty_{ticker}")
             new_px  = st.number_input("Avg Buy Price", min_value=0.0, value=float(pos["buy_price"]),
@@ -768,8 +769,14 @@ def render_sidebar(positions, is_admin):
                 save_portfolio(updated)
                 st.rerun()
             else:
-                updated[ticker] = {**pos, "quantity": new_qty, "buy_price": new_px,
-                                   "category": new_cat, "currency": new_cur}
+                # Se il ticker è cambiato, rimuovi il vecchio e aggiungi il nuovo
+                if new_ticker and new_ticker != ticker:
+                    del updated[ticker]
+                    updated[new_ticker] = {**pos, "ticker": new_ticker, "quantity": new_qty,
+                                           "buy_price": new_px, "category": new_cat, "currency": new_cur}
+                else:
+                    updated[ticker] = {**pos, "quantity": new_qty, "buy_price": new_px,
+                                       "category": new_cat, "currency": new_cur}
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Add New Position**")
