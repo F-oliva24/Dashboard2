@@ -1,5 +1,4 @@
 
-
 import json
 import time
 import secrets
@@ -35,6 +34,7 @@ BUDGET_DEFAULT    = 1450.0
 GUEST_HOURS       = 1
 PORTFOLIO_CACHE   = Path("last_portfolio.json")
 BUY_PRICES_FILE   = Path("buy_prices.json")
+GUEST_PW_FILE     = Path("guest_pw.json")
 
 # Known ISIN → Yahoo ticker + currency mapping
 ISIN_MAP = {
@@ -46,6 +46,24 @@ ISIN_MAP = {
     "IE00B52MJY50": {"ticker": "VUSA.AS", "currency": "USD", "name": "Vanguard S&P 500"},
     "IE00B3XXRP09": {"ticker": "VWRL.AS", "currency": "USD", "name": "Vanguard FTSE All-World Dist"},
 }
+
+def save_guest_pw(password: str, expiry: datetime) -> None:
+    """Salva guest password su file — accessibile da qualsiasi sessione."""
+    with open(GUEST_PW_FILE, "w") as f:
+        json.dump({"password": password, "expiry": expiry.isoformat()}, f)
+
+def load_guest_pw() -> tuple[str | None, datetime | None]:
+    """Carica guest password dal file."""
+    if not GUEST_PW_FILE.exists():
+        return None, None
+    try:
+        with open(GUEST_PW_FILE) as f:
+            data = json.load(f)
+        pw  = data.get("password")
+        exp = datetime.fromisoformat(data["expiry"]) if "expiry" in data else None
+        return pw, exp
+    except:
+        return None, None
 
 def load_buy_prices() -> dict:
     """Carica prezzi di carico manuali da file JSON."""
@@ -252,7 +270,8 @@ def check_auth():
     if "auth_role" not in st.session_state:
         return None
     if st.session_state["auth_role"] == "guest":
-        exp = st.session_state.get("guest_expiry")
+        # Check expiry from file (shared across sessions)
+        _, exp = load_guest_pw()
         if exp and datetime.now() > exp:
             st.session_state.pop("auth_role", None)
             return None
@@ -270,8 +289,8 @@ def render_login():
     with col:
         pw = st.text_input("Password", type="password", placeholder="Enter password...")
         if st.button("Access Dashboard", type="primary", use_container_width=True):
-            guest_pw  = st.session_state.get("guest_password")
-            guest_exp = st.session_state.get("guest_expiry")
+            # Load guest password from file (shared across all sessions)
+            guest_pw, guest_exp = load_guest_pw()
             if pw == get_admin_pw():
                 st.session_state["auth_role"] = "admin"
                 st.rerun()
@@ -289,15 +308,16 @@ def render_auth_sidebar(is_admin):
         if st.sidebar.button("🔑 Generate Guest Password"):
             pw  = gen_guest_pw()
             exp = datetime.now() + timedelta(hours=GUEST_HOURS)
-            st.session_state["guest_password"] = pw
-            st.session_state["guest_expiry"]   = exp
+            save_guest_pw(pw, exp)
             st.sidebar.success(f"Password: `{pw}`")
             st.sidebar.caption(f"Expires at {exp.strftime('%H:%M')} ({GUEST_HOURS}h)")
-        if st.session_state.get("guest_password"):
-            exp = st.session_state.get("guest_expiry")
-            if exp and datetime.now() < exp:
-                rem = int((exp - datetime.now()).seconds / 60)
-                st.sidebar.info(f"Active: `{st.session_state['guest_password']}` — {rem} min left")
+        # Show active guest password from file
+        guest_pw, guest_exp = load_guest_pw()
+        if guest_pw and guest_exp and datetime.now() < guest_exp:
+            rem = int((guest_exp - datetime.now()).seconds / 60)
+            st.sidebar.info(f"Active: `{guest_pw}` — {rem} min left")
+        elif guest_pw:
+            st.sidebar.caption("Guest password expired.")
     else:
         st.sidebar.markdown('<span class="badge-guest">👁 Guest (read-only)</span>', unsafe_allow_html=True)
         exp = st.session_state.get("guest_expiry")
