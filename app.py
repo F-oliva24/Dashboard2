@@ -1,4 +1,5 @@
 
+
 import json
 import time
 import secrets
@@ -402,7 +403,7 @@ def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
     positions_df columns: ticker, name, isin, quantity, last_price, currency, value_eur
     """
     try:
-        df = pd.read_csv(uploaded_file, thousands='.', decimal=',')
+        df = pd.read_csv(uploaded_file)
         df.columns = [c.strip() for c in df.columns]
 
         # Rename columns
@@ -420,13 +421,21 @@ def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
         df = df[[c for c in needed if c in df.columns]].copy()
 
         # Clean numeric columns
-        for col in ["qty","last_price","value_eur"]:
+        # qty: already integer in CSV — read directly without string manipulation
+        if "qty" in df.columns:
+            df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
+
+        # last_price and value_eur: use comma as decimal separator in DEGIRO CSV
+        for col in ["last_price", "value_eur"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(".","",regex=False)
-                                       .str.replace(",",".",regex=False)
-                                       .str.replace("€","",regex=False)
-                                       .str.strip(), errors="coerce")
+                    df[col].astype(str)
+                           .str.replace('"', '', regex=False)
+                           .str.replace("€", "", regex=False)
+                           .str.strip()
+                           .str.replace(r'(?<=\d)\.(?=\d{3})', '', regex=True)
+                           .str.replace(",", ".", regex=False),
+                    errors="coerce")
 
         # Drop cash rows and rows without ISIN
         df = df.dropna(subset=["isin"])
