@@ -1,5 +1,4 @@
 
-
 import json
 import time
 import secrets
@@ -7,7 +6,7 @@ import string
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import numpy as np # type: ignore
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -15,9 +14,7 @@ import streamlit as st
 import yfinance as yf
 from scipy import stats
 
-# ------------------------------------------------------------------ #
-#  CONFIG
-# ------------------------------------------------------------------ #
+
 
 st.set_page_config(
     page_title="Investment Dashboard",
@@ -190,12 +187,25 @@ st.markdown(f"""
   [data-testid="baseButton-primary"]:hover {{
     background-color: #00d4ff !important;
   }}
-  [data-testid="baseButton-secondary"] {{
+  [data-testid="baseButton-secondary"],
+  button[kind="secondary"] {{
     background-color: #1a1a1a !important;
     color: {C['text']} !important;
-    border: 1px solid #333333 !important;
+    border: 1px solid #444444 !important;
   }}
-  [data-testid="baseButton-secondary"]:hover {{
+  [data-testid="baseButton-secondary"]:hover,
+  button[kind="secondary"]:hover {{
+    background-color: #2a2a2a !important;
+    border-color: {C['blue']} !important;
+    color: {C['blue']} !important;
+  }}
+  /* Forza tutti i bottoni non-primary a sfondo scuro */
+  button:not([data-testid="baseButton-primary"]) {{
+    background-color: #1a1a1a !important;
+    color: {C['text']} !important;
+    border: 1px solid #444444 !important;
+  }}
+  button:not([data-testid="baseButton-primary"]):hover {{
     background-color: #2a2a2a !important;
     border-color: {C['blue']} !important;
     color: {C['blue']} !important;
@@ -765,9 +775,8 @@ def render_score_chart(df, title, color):
     labels = [f"{t} — {df.loc[t,'Name'][:25]}" if name_c else t for t in df2.index]
     fig = go.Figure(go.Bar(
         y=labels, x=df2["Score"].values, orientation="h",
-        marker=dict(color=df2["Score"].values, colorscale=[
-            [0, C["border"]], [0.5, color+"88"], [1, color]
-        ], showscale=False),
+        marker_color=color,
+        opacity=0.85,
         text=[f"{v:.2f}" for v in df2["Score"].values],
         textposition="outside", textfont=dict(color=C["text"]),
         hovertemplate="<b>%{y}</b><br>Score: %{x:.3f}<extra></extra>"
