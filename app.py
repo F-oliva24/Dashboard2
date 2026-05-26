@@ -8,13 +8,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 from scipy import stats
 
-
+# ------------------------------------------------------------------ #
+#  CONFIG
+# ------------------------------------------------------------------ #
 
 st.set_page_config(
     page_title="Investment Dashboard",
@@ -651,6 +654,11 @@ def score_macro(prices, names) -> pd.DataFrame:
 # ------------------------------------------------------------------ #
 
 def calc_portfolio(positions, current_prices, fx_rates):
+    """
+    P&L is calculated in the asset's original currency.
+    Only the EUR value (for totals and charts) uses FX conversion.
+    This way P&L is not distorted by FX fluctuations since purchase.
+    """
     rows = []
     total_value = 0.0
     for ticker, pos in positions.items():
@@ -659,19 +667,41 @@ def calc_portfolio(positions, current_prices, fx_rates):
         currency = pos.get("currency", "EUR")
         fx       = fx_rates.get(currency, 1.0)
         curr_px  = current_prices.get(ticker)
-        cost_eur = qty * buy_px * fx
-        val_eur  = qty * curr_px * fx if curr_px else None
-        pl_eur   = (val_eur - cost_eur) if val_eur else None
-        pl_pct   = (pl_eur / cost_eur) if (pl_eur is not None and cost_eur > 0) else None
-        total_value += val_eur or cost_eur
-        rows.append({"Ticker": ticker, "Category": pos.get("category",""),
-                     "Qty": qty, "Buy Price": buy_px, "Currency": currency,
-                     "Current Price": curr_px, "Cost (€)": round(cost_eur,2),
-                     "Value (€)": round(val_eur,2) if val_eur else None,
-                     "P&L (€)": round(pl_eur,2) if pl_eur is not None else None,
-                     "P&L (%)": pl_pct})
+
+        # P&L in original currency (not affected by FX changes since purchase)
+        cost_orig  = qty * buy_px
+        val_orig   = qty * curr_px if curr_px else None
+        pl_orig    = (val_orig - cost_orig) if val_orig is not None else None
+        pl_pct     = (pl_orig / cost_orig) if (pl_orig is not None and cost_orig > 0) else None
+
+        # EUR conversion for portfolio totals and charts (uses today's FX)
+        cost_eur   = cost_orig * fx
+        val_eur    = val_orig * fx if val_orig is not None else None
+        pl_eur     = pl_orig * fx if pl_orig is not None else None
+
+        total_value += val_eur if val_eur is not None else cost_eur
+
+        rows.append({
+            "Ticker":          ticker,
+            "Category":        pos.get("category", ""),
+            "Qty":             qty,
+            "Buy Price":       f"{buy_px:.2f} {currency}",
+            "Current Price":   f"{curr_px:.2f} {currency}" if curr_px else "N/A",
+            "Cost (orig)":     round(cost_orig, 2),
+            "Value (orig)":    round(val_orig, 2) if val_orig is not None else None,
+            "P&L (orig)":      round(pl_orig, 2) if pl_orig is not None else None,
+            "P&L (%)":         pl_pct,
+            "Currency":        currency,
+            "Value (€)":       round(val_eur, 2) if val_eur is not None else None,
+            "P&L (€)":         round(pl_eur, 2) if pl_eur is not None else None,
+            "Cost (€)":        round(cost_eur, 2),
+        })
+
     df = pd.DataFrame(rows).set_index("Ticker")
-    df["Weight"] = df["Value (€)"] / total_value if total_value > 0 else 0
+    df["Weight"] = (
+        pd.to_numeric(df["Value (€)"], errors="coerce") / total_value
+        if total_value > 0 else 0
+    )
     return df, total_value
 
 def calc_risk(port_ret, total_value, confidence=0.95, horizon=1):
@@ -747,16 +777,30 @@ def render_sidebar(positions, is_admin):
     new_cur = st.sidebar.selectbox("Currency", ["EUR","USD","CHF","GBP"], key="ncur")
     new_cat = st.sidebar.text_input("Category", placeholder="e.g. UCITS Accumulo", key="ncat")
 
-    if st.sidebar.button("➕ Add Position", type="primary"):
+    col_add, col_save = st.sidebar.columns(2)
+    with col_add:
+        add_clicked = st.button("➕ Add", type="primary", key="btn_add")
+    with col_save:
+        save_clicked = st.button("💾 Save", key="btn_save")
+
+    if add_clicked:
         if new_t:
-            updated[new_t] = {"ticker": new_t, "quantity": new_qty, "buy_price": new_px,
-                               "currency": new_cur, "category": new_cat, "notes": ""}
+            updated[new_t] = {
+                "ticker":    new_t,
+                "quantity":  new_qty,
+                "buy_price": new_px,
+                "currency":  new_cur,
+                "category":  new_cat,
+                "notes":     "",
+            }
+            st.session_state["positions"] = updated
             save_portfolio(updated)
             st.rerun()
         else:
             st.sidebar.error("Enter a valid ticker.")
 
-    if st.sidebar.button("💾 Save Changes"):
+    if save_clicked:
+        st.session_state["positions"] = updated
         save_portfolio(updated)
         st.sidebar.success("Saved!")
 
@@ -839,6 +883,8 @@ def main():
     pivot, total_value = calc_portfolio(positions, current_prices, fx_rates)
     total_cost = pd.to_numeric(pivot["Cost (€)"], errors="coerce").sum()
     total_pl   = pd.to_numeric(pivot["P&L (€)"],  errors="coerce").sum()
+    # P&L % calculated on EUR values to be consistent
+    total_pl_pct = total_pl / total_cost if total_cost > 0 else 0
     budget     = st.session_state["budget"]
 
     # ================================================================
@@ -858,23 +904,25 @@ def main():
         with k2:
             pl_color = C["green"] if total_pl >= 0 else C["red"]
             kpi("Unrealised P&L",
-                f"€{total_pl:+,.0f} ({total_pl/total_cost:+.1%})" if total_cost>0 else "N/A",
+                f"€{total_pl:+,.0f} ({total_pl_pct:+.1%})",
                 pl_color)
         with k3: kpi("Positions", str(len(positions)), C["teal"])
         with k4: kpi("Monthly Budget", f"€{budget:,.0f}", C["purple"])
 
         section("Positions")
         disp = pivot.copy()
-        disp["Buy Price"]     = disp.apply(lambda r: f"{r['Buy Price']:.2f} {r['Currency']}", axis=1)
-        disp["Current Price"] = disp.apply(
-            lambda r: f"{r['Current Price']:.2f} {r['Currency']}" if pd.notna(r["Current Price"]) else "N/A", axis=1)
-        disp["Cost (€)"]  = disp["Cost (€)"].map("€{:,.2f}".format)
-        disp["Value (€)"] = disp["Value (€)"].apply(lambda x: f"€{x:,.2f}" if pd.notna(x) else "N/A")
-        disp["P&L (€)"]   = disp["P&L (€)"].apply(lambda x: f"€{x:+,.2f}" if pd.notna(x) else "N/A")
-        disp["P&L (%)"]   = disp["P&L (%)"].apply(lambda x: f"{x:+.2%}" if pd.notna(x) else "N/A")
-        disp["Weight"]    = disp["Weight"].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "N/A")
+        # Show cost, value and P&L in original currency
+        disp["Cost"]    = disp.apply(
+            lambda r: f"{r['Cost (orig)']:,.2f} {r['Currency']}" if pd.notna(r.get("Cost (orig)")) else "N/A", axis=1)
+        disp["Value"]   = disp.apply(
+            lambda r: f"{r['Value (orig)']:,.2f} {r['Currency']}" if pd.notna(r.get("Value (orig)")) else "N/A", axis=1)
+        disp["P&L"]     = disp.apply(
+            lambda r: f"{r['P&L (orig)']:+,.2f} {r['Currency']}" if pd.notna(r.get("P&L (orig)")) else "N/A", axis=1)
+        disp["P&L (%)"] = disp["P&L (%)"].apply(lambda x: f"{x:+.2%}" if pd.notna(x) else "N/A")
+        disp["Value €"] = disp["Value (€)"].apply(lambda x: f"€{x:,.2f}" if pd.notna(x) else "N/A")
+        disp["Weight"]  = disp["Weight"].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "N/A")
         st.dataframe(disp[["Category","Qty","Buy Price","Current Price",
-                             "Cost (€)","Value (€)","P&L (€)","P&L (%)","Weight"]],
+                             "Cost","Value","P&L","P&L (%)","Value €","Weight"]],
                      use_container_width=True)
 
         section("Allocation & Monthly Budget")
@@ -897,11 +945,13 @@ def main():
             section("Budget Split")
             alloc_rows = []
             for ticker, row in pivot.iterrows():
-                w        = float(row["Weight"]) if isinstance(row["Weight"], float) else 0
+                w        = pd.to_numeric(row["Weight"], errors="coerce")
+                w        = float(w) if pd.notna(w) else 0.0
                 bud_eur  = budget * w
                 curr_px  = current_prices.get(ticker)
                 currency = positions[ticker].get("currency","EUR")
-                price_eur= curr_px * fx_rates.get(currency,1.0) if curr_px else None
+                fx       = fx_rates.get(currency, 1.0)
+                price_eur= curr_px * fx if curr_px else None
                 qty_sug  = bud_eur / price_eur if price_eur else None
                 alloc_rows.append({
                     "Ticker":       ticker,
@@ -914,16 +964,20 @@ def main():
             alloc_df.loc[len(alloc_df)] = ["TOTAL","100%",f"€{budget:.2f}","",""]
             st.dataframe(alloc_df.set_index("Ticker"), use_container_width=True)
 
-        pl_vals = pd.to_numeric(pivot["P&L (€)"], errors="coerce")
-        pl_cols = [C["green"] if v >= 0 else C["red"] for v in pl_vals]
+        pl_vals_eur = pd.to_numeric(pivot["P&L (€)"], errors="coerce")
+        pl_vals_orig = pivot.apply(
+            lambda r: f"{r['P&L (orig)']:+,.2f} {r['Currency']}" if pd.notna(r.get("P&L (orig)")) else "N/A",
+            axis=1)
+        pl_cols = [C["green"] if (pd.notna(v) and v >= 0) else C["red"] for v in pl_vals_eur]
         fig_pl  = go.Figure(go.Bar(
-            x=pivot.index.tolist(), y=pl_vals.tolist(), marker_color=pl_cols,
-            text=[f"€{v:+,.0f}" for v in pl_vals], textposition="outside",
-            textfont=dict(color=C["text"]),
-            hovertemplate="<b>%{x}</b><br>P&L: €%{y:+,.2f}<extra></extra>"
+            x=pivot.index.tolist(), y=pl_vals_eur.tolist(), marker_color=pl_cols,
+            text=[f"€{v:+,.0f}" if pd.notna(v) else "N/A" for v in pl_vals_eur],
+            textposition="outside", textfont=dict(color=C["text"]),
+            customdata=pl_vals_orig.tolist(),
+            hovertemplate="<b>%{x}</b><br>P&L (€): €%{y:+,.2f}<br>P&L (orig): %{customdata}<extra></extra>"
         ))
         fig_pl.add_hline(y=0, line_color=C["muted"], line_width=1)
-        apply_layout(fig_pl, f"Unrealised P&L  |  Total: €{total_pl:+,.0f}", 340)
+        apply_layout(fig_pl, f"Unrealised P&L in EUR  |  Total: €{total_pl:+,.0f}", 340)
         st.plotly_chart(fig_pl, use_container_width=True)
 
     # ================================================================
