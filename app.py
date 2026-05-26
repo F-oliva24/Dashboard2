@@ -7,9 +7,8 @@ import string
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import numpy as np
+import numpy as np # type: ignore
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
@@ -131,9 +130,8 @@ FRED_SERIES = {
 
 st.markdown(f"""
 <style>
-  /* Global background and text */
   html, body, [data-testid="stAppViewContainer"],
-  [data-testid="stApp"], section.main {{
+  [data-testid="stApp"], section.main, .stMainBlockContainer {{
     background-color: {C['bg']} !important;
     color: {C['text']} !important;
   }}
@@ -141,11 +139,9 @@ st.markdown(f"""
     background-color: #080808 !important;
     border-right: 1px solid {C['border']} !important;
   }}
-  /* Headers */
-  h1, h2, h3, h4, h5, h6, p, span, div, label {{
+  h1, h2, h3, h4, h5, h6, p, label, .stMarkdown {{
     color: {C['text']} !important;
   }}
-  /* Tabs */
   [data-testid="stTabs"] button {{
     color: {C['muted']} !important;
     background: transparent !important;
@@ -155,41 +151,69 @@ st.markdown(f"""
     color: {C['blue']} !important;
     border-bottom: 2px solid {C['blue']} !important;
   }}
-  /* Inputs */
-  input, textarea, select {{
-    background-color: #111111 !important;
+  input, textarea {{
+    background-color: #1a1a1a !important;
     color: {C['text']} !important;
-    border: 1px solid {C['border']} !important;
+    border: 1px solid #333333 !important;
+    border-radius: 6px !important;
   }}
-  /* Buttons */
+  [data-testid="stNumberInput"] button {{
+    background-color: #2a2a2a !important;
+    color: {C['text']} !important;
+    border: 1px solid #333333 !important;
+  }}
+  [data-testid="stNumberInput"] button:hover {{
+    background-color: {C['blue']} !important;
+    color: #000000 !important;
+  }}
+  [data-testid="stSelectbox"] > div > div,
+  [data-testid="stMultiSelect"] > div > div {{
+    background-color: #1a1a1a !important;
+    color: {C['text']} !important;
+    border: 1px solid #333333 !important;
+  }}
+  [data-testid="stSelectbox"] svg {{ fill: {C['text']} !important; }}
+  div[role="option"] {{
+    background-color: #1a1a1a !important;
+    color: {C['text']} !important;
+  }}
+  div[role="option"]:hover {{
+    background-color: {C['blue']}33 !important;
+    color: {C['blue']} !important;
+  }}
   [data-testid="baseButton-primary"] {{
     background-color: {C['blue']} !important;
     color: #000000 !important;
     font-weight: 700 !important;
     border: none !important;
   }}
+  [data-testid="baseButton-primary"]:hover {{
+    background-color: #00d4ff !important;
+  }}
   [data-testid="baseButton-secondary"] {{
-    background-color: transparent !important;
+    background-color: #1a1a1a !important;
     color: {C['text']} !important;
-    border: 1px solid {C['border']} !important;
+    border: 1px solid #333333 !important;
   }}
-  /* Dataframe */
-  [data-testid="stDataFrame"] {{
-    background-color: {C['card']} !important;
+  [data-testid="baseButton-secondary"]:hover {{
+    background-color: #2a2a2a !important;
+    border-color: {C['blue']} !important;
+    color: {C['blue']} !important;
   }}
-  /* Expander */
   [data-testid="stExpander"] {{
     background-color: #0D0D0D !important;
     border: 1px solid {C['border']} !important;
     border-radius: 8px !important;
   }}
-  /* Selectbox / multiselect */
-  [data-testid="stSelectbox"] > div,
-  [data-testid="stMultiSelect"] > div {{
+  [data-testid="stExpander"] summary {{ color: {C['text']} !important; }}
+  [data-testid="stExpander"] summary:hover {{ color: {C['blue']} !important; }}
+  [data-testid="stDataFrame"] {{ background-color: {C['card']} !important; }}
+  .stCaption, small {{ color: {C['muted']} !important; }}
+  [data-testid="stAlert"] {{
     background-color: #111111 !important;
+    border: 1px solid #333333 !important;
     color: {C['text']} !important;
   }}
-  /* Divider */
   hr {{ border-color: {C['border']} !important; }}
 
   /* KPI cards */
@@ -940,13 +964,13 @@ def main():
                                       row_heights=[0.65,0.35], vertical_spacing=0.04)
                 fig_p.add_trace(go.Scatter(
                     x=cum_r.index, y=(cum_r-1)*100, name="Cumulative Return %",
-                    fill="tozeroy", fillcolor=C["blue"]+"22",
+                    fill="tozeroy", fillcolor="rgba(0,180,255,0.13)",
                     line=dict(color=C["blue"], width=2),
                     hovertemplate="%{x|%d %b %Y}<br>%{y:.2f}%<extra></extra>"
                 ), row=1, col=1)
                 fig_p.add_trace(go.Scatter(
                     x=dd.index, y=dd.values*100, name="Drawdown %",
-                    fill="tozeroy", fillcolor=C["red"]+"33",
+                    fill="tozeroy", fillcolor="rgba(255,59,59,0.2)",
                     line=dict(color=C["red"], width=1.5),
                     hovertemplate="%{x|%d %b %Y}<br>%{y:.2f}%<extra></extra>"
                 ), row=2, col=1)
