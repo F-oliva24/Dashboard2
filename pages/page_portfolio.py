@@ -1,7 +1,4 @@
-"""
-pages/page_portfolio.py — Pagina My Portfolio.
-Upload CSV DEGIRO → metriche, P&L, VaR, allocazione mensile.
-"""
+
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -234,3 +231,107 @@ def render(is_admin: bool, budget: float) -> None:
             ))
             apply_layout(fig_corr, "Correlation Matrix", 380)
             st.plotly_chart(fig_corr, use_container_width=True)
+
+    # ------------------------------------------------------------------ #
+    #  REBALANCING SUGGESTION
+    # ------------------------------------------------------------------ #
+    section("Rebalancing Suggestion")
+    st.caption("Set target weights for each category. The tool calculates how to allocate "
+               "your monthly budget to move closer to your targets.")
+
+    # Categorie presenti nel portafoglio
+    cats_in_ptf = pivot["Name"].apply(lambda _: "").index  # placeholder
+    # Raggruppa per categoria
+    cat_values = {}
+    for ticker, row in pivot.iterrows():
+        cat = str(positions_df[positions_df["ticker"]==ticker]["currency"].values[0]
+                  if not positions_df[positions_df["ticker"]==ticker].empty else "Other")
+        # Usa la categoria dalla posizione
+        cat_actual = "Other"
+        from config import UNIVERSE
+        for c, items in UNIVERSE.items():
+            if ticker in items:
+                cat_actual = c
+                break
+        val = pd.to_numeric(row.get("Value (€) YF"), errors="coerce")
+        if pd.notna(val):
+            cat_values[cat_actual] = cat_values.get(cat_actual, 0) + float(val)
+
+    cats_present = list(cat_values.keys())
+    if not cats_present:
+        st.info("No positions to rebalance.")
+    else:
+        # Target weights input
+        st.markdown("**Set target allocation (must sum to 100%)**")
+        target_cols = st.columns(min(len(cats_present), 3))
+        targets = {}
+        for i, cat in enumerate(cats_present):
+            current_w = cat_values[cat] / total_value if total_value > 0 else 0
+            with target_cols[i % len(target_cols)]:
+                targets[cat] = st.number_input(
+                    f"{cat[:20]} (now {current_w:.0%})",
+                    min_value=0.0, max_value=100.0,
+                    value=round(current_w * 100, 1),
+                    step=5.0, format="%.1f",
+                    key=f"target_{cat}"
+                ) / 100.0
+
+        total_target = sum(targets.values())
+        if abs(total_target - 1.0) > 0.01:
+            st.warning(f"Targets sum to {total_target:.0%} — must be 100%. Adjust above.")
+        else:
+            # Calcola acquisti suggeriti per ogni ticker
+            rebal_rows = []
+            for ticker, row in pivot.iterrows():
+                # Trova categoria del ticker
+                ticker_cat = "Other"
+                for c, items in UNIVERSE.items():
+                    if ticker in items:
+                        ticker_cat = c
+                        break
+
+                current_val = pd.to_numeric(row.get("Value (€) YF"), errors="coerce")
+                if not pd.notna(current_val):
+                    continue
+
+                current_val = float(current_val)
+                target_w    = targets.get(ticker_cat, 0)
+                # Peso target del ticker = peso target categoria × peso ticker nella categoria
+                cat_total   = cat_values.get(ticker_cat, 1)
+                ticker_w_in_cat = current_val / cat_total if cat_total > 0 else 0
+                ticker_target_val = (total_value + budget) * target_w * ticker_w_in_cat
+
+                buy_eur   = max(0, ticker_target_val - current_val)
+                cp        = current_prices.get(ticker)
+                cur       = str(row.get("Currency","EUR"))
+                fx        = fx_rates.get(cur, 1.0)
+                price_eur = cp * fx if cp else None
+                qty_sug   = buy_eur / price_eur if (price_eur and price_eur > 0) else None
+
+                # Commissione
+                from config import ISIN_MAP
+                isin = str(positions_df[positions_df["ticker"]==ticker]["isin"].values[0]
+                           if not positions_df[positions_df["ticker"]==ticker].empty else "")
+                mapped_cur = ISIN_MAP.get(isin, {}).get("currency", cur)
+                comm = 1.0 if mapped_cur == "EUR" else 3.0
+
+                rebal_rows.append({
+                    "Ticker":        ticker,
+                    "Category":      ticker_cat,
+                    "Current (€)":   f"€{current_val:,.2f}",
+                    "Target (€)":    f"€{ticker_target_val:,.2f}",
+                    "Buy (€)":       f"€{buy_eur:,.2f}",
+                    "Units to buy":  f"{qty_sug:.3f}" if qty_sug else "N/A",
+                    "Commission (€)":f"€{comm:.0f}" if buy_eur > 0 else "—",
+                })
+
+            if rebal_rows:
+                total_buy = sum(float(r["Buy (€)"].replace("€","").replace(",",""))
+                                for r in rebal_rows)
+                rebal_df = pd.DataFrame(rebal_rows).set_index("Ticker")
+                st.dataframe(rebal_df, use_container_width=True)
+                st.caption(f"Total suggested purchases: €{total_buy:,.2f} "
+                           f"(budget: €{budget:,.2f})")
+                if total_buy > budget:
+                    st.warning(f"Suggested purchases (€{total_buy:,.0f}) exceed your budget "
+                               f"(€{budget:,.0f}). Prioritize highest-weight categories.")
