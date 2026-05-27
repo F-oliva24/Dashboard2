@@ -610,7 +610,9 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
         # n_transactions stored in commissions dict keyed by ISIN
         # Default: 1 transaction if not explicitly set
         n_tx = int(commissions.get(isin, 1)) if commissions is not None else 1
-        commission_eur = calc_commission_eur(isin, deg_currency, n_tx)
+        # Use mapped currency (from ISIN_MAP) for commission calculation
+        # This ensures EUR positions pay €1 and foreign currency positions pay €3
+        commission_eur = calc_commission_eur(isin, currency, n_tx)
 
         cost_orig = qty * buy_px
         val_orig  = qty * curr_px if curr_px else None
@@ -992,7 +994,9 @@ def page_portfolio(is_admin, budget):
             isin     = str(pos.get("isin",""))
             name     = str(pos.get("yf_name", pos.get("name","")))[:25]
             currency = str(pos.get("degiro_currency", pos.get("currency","EUR")))
-            rate     = 1 if currency == "EUR" else 3
+            # Use mapped currency for correct commission rate
+            mapped_currency = ISIN_MAP.get(isin, {}).get("currency", currency)
+            rate     = 1 if mapped_currency == "EUR" else 3
             current_tx = int(commissions.get(isin, 1))
             with tx_cols[i % len(tx_cols)]:
                 new_tx = st.number_input(
