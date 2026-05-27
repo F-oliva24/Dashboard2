@@ -1,6 +1,4 @@
 
-
-
 import json
 import time
 import secrets
@@ -269,20 +267,16 @@ def apply_layout(fig, title="", height=380):
 
 def kpi(label, value, color, tooltip=None):
     """
-    KPI card usando st.metric con help= per tooltip nativo (icona ? hover).
-    Il colore viene applicato via CSS sulla metrica.
+    KPI card con tooltip HTML nativo (title= attribute).
+    Hover con il mouse mostra la spiegazione nel browser tooltip.
     """
-    # st.metric ha il parametro help= che mostra un tooltip nativo con icona ?
-    st.metric(
-        label=label,
-        value=value,
-        help=tooltip or "",
-        delta=None,
-    )
-    # Override colore con CSS inline
+    tooltip_attr = f'title="{tooltip}"' if tooltip else ""
+    info_icon = ' <span style="font-size:12px;color:#6B7280;cursor:help;" title="{t}">ℹ️</span>'.format(t=tooltip.replace('"', "'")) if tooltip else ""
     st.markdown(
-        f'<style>[data-testid="stMetric"] [data-testid="stMetricValue"] p {{' +
-        f'color: {color} !important; font-size: 24px !important; font-weight: 800 !important;}}</style>',
+        f'''<div class="kpi-box" {tooltip_attr} style="cursor:default">
+            <div class="kpi-label">{label}{info_icon}</div>
+            <div class="kpi-value" style="color:{color}">{value}</div>
+        </div>''',
         unsafe_allow_html=True
     )
 
@@ -800,9 +794,21 @@ def render_risk_charts(port_ret, total_value):
 
     section("Value at Risk")
     v1,v2,v3 = st.columns(3)
-    with v1: kpi("VaR 95% — 1 day",  f"€{r95['var_hist_eur']:,.0f} ({r95['var_hist_pct']:.2%})",  C["orange"])
-    with v2: kpi("VaR 99% — 1 day",  f"€{r99['var_hist_eur']:,.0f} ({r99['var_hist_pct']:.2%})",  C["red"])
-    with v3: kpi("VaR 95% — 5 days", f"€{r95_5['var_hist_eur']:,.0f} ({r95_5['var_hist_pct']:.2%})", C["yellow"])
+    with v1: kpi("VaR 99% — 1 day",
+                  f"€{r99_1d['var_hist_eur']:,.0f} ({r99_1d['var_hist_pct']:.2%})", C["red"],
+                  f"Con il 99% di probabilità, la perdita giornaliera non supererà "
+                  f"€{r99_1d['var_hist_eur']:,.0f} ({r99_1d['var_hist_pct']:.2%} del portafoglio). "
+                  f"Solo nell'1% dei giorni storici la perdita ha superato questa soglia.")
+    with v2: kpi("VaR 99% — 20 days",
+                  f"€{r99_20d['var_hist_eur']:,.0f} ({r99_20d['var_hist_pct']:.2%})", C["red"],
+                  f"Con il 99% di probabilità, la perdita su 20 giorni lavorativi (~1 mese) non supererà "
+                  f"€{r99_20d['var_hist_eur']:,.0f} ({r99_20d['var_hist_pct']:.2%}). "
+                  f"Utile per pianificare il budget mensile in scenari avversi.")
+    with v3: kpi("VaR 95% — 20 days",
+                  f"€{r95_20d['var_hist_eur']:,.0f} ({r95_20d['var_hist_pct']:.2%})", C["orange"],
+                  f"Con il 95% di probabilità, la perdita su 20 giorni lavorativi (~1 mese) non supererà "
+                  f"€{r95_20d['var_hist_eur']:,.0f} ({r95_20d['var_hist_pct']:.2%}). "
+                  f"Scenario meno conservativo del VaR 99%.")
 
     cum_r = r95["cumulative_returns"]
     dd    = r95["drawdown_series"]
