@@ -1,5 +1,4 @@
 
-
 import json
 import time
 import secrets
@@ -31,7 +30,7 @@ st.set_page_config(
 #  CONSTANTS
 # ------------------------------------------------------------------ #
 
-BUDGET_DEFAULT    = 1450.0
+BUDGET_DEFAULT    = 1300.0
 GUEST_HOURS       = 1
 PORTFOLIO_CACHE   = Path("last_portfolio.json")
 BUY_PRICES_FILE   = Path("buy_prices.json")
@@ -266,10 +265,21 @@ def apply_layout(fig, title="", height=380):
     fig.update_yaxes(gridcolor=C["border"], linecolor=C["border"], zeroline=False)
     return fig
 
-def kpi(label, value, color):
-    st.markdown(f'<div class="kpi-box"><div class="kpi-label">{label}</div>'
-                f'<div class="kpi-value" style="color:{color}">{value}</div></div>',
-                unsafe_allow_html=True)
+def kpi(label, value, color, tooltip=None):
+    """
+    KPI card. If tooltip is provided, shows a Streamlit native tooltip
+    via st.metric workaround using help= parameter.
+    """
+    if tooltip:
+        # Use columns trick: markdown card + hidden metric for tooltip
+        st.markdown(f'<div class="kpi-box"><div class="kpi-label">{label}</div>'
+                    f'<div class="kpi-value" style="color:{color}">{value}</div></div>',
+                    unsafe_allow_html=True)
+        st.caption(f"ℹ️ {tooltip}")
+    else:
+        st.markdown(f'<div class="kpi-box"><div class="kpi-label">{label}</div>'
+                    f'<div class="kpi-value" style="color:{color}">{value}</div></div>',
+                    unsafe_allow_html=True)
 
 def section(title):
     st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
@@ -598,7 +608,8 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
 
         # Commission: €1/transaction EUR, €3/transaction other currencies
         # n_transactions stored in commissions dict keyed by ISIN
-        n_tx = int(commissions.get(isin, 1)) if commissions else 1
+        # Default: 1 transaction if not explicitly set
+        n_tx = int(commissions.get(isin, 1)) if commissions is not None else 1
         commission_eur = calc_commission_eur(isin, deg_currency, n_tx)
 
         cost_orig = qty * buy_px
@@ -984,11 +995,18 @@ def page_portfolio(is_admin, budget):
     # KPIs
     section("Overview")
     k1,k2,k3,k4 = st.columns(4)
-    with k1: kpi("Total Value",           f"€{total_value:,.0f}",                         C["blue"])
+    with k1: kpi("Total Value", f"€{total_value:,.0f}", C["blue"],
+                  "Valore corrente totale del portafoglio, convertito in EUR ai tassi di cambio attuali.")
     with k2: kpi("P&L (net commissions)", f"€{total_pl:+,.0f} ({total_pl_pct:+.1%})",
-                  C["green"] if total_pl>=0 else C["red"])
-    with k3: kpi("Total Commissions",     f"€{total_commissions:,.2f}",                   C["muted"])
-    with k4: kpi("Monthly Budget",        f"€{budget:,.0f}",                              C["purple"])
+                  C["green"] if total_pl>=0 else C["red"],
+                  "Profitto o perdita non realizzata rispetto al prezzo di acquisto, "
+                  "al netto delle commissioni pagate. Positivo = sei in guadagno, negativo = in perdita.")
+    with k3: kpi("Total Commissions", f"€{total_commissions:,.2f}", C["muted"],
+                  "Totale commissioni pagate a DEGIRO: €1 per ogni transazione in EUR, "
+                  "€3 per ogni transazione in valuta estera (USD, CHF, GBP).")
+    with k4: kpi("Monthly Budget", f"€{budget:,.0f}", C["purple"],
+                  "Budget mensile disponibile per nuovi acquisti. "
+                  "Modificabile dalla sidebar. Usato per calcolare le quote suggerite.")
 
     # Positions table
     section("Positions")
@@ -1376,15 +1394,43 @@ def page_macro():
 
     latest = macro.ffill().iloc[-1]
     k1,k2,k3,k4 = st.columns(4)
-    with k1: kpi("Fed Funds Rate", f"{latest.get('Fed Funds Rate',float('nan')):.2f}%", C["blue"])
+    with k1: kpi("Fed Funds Rate", f"{latest.get('Fed Funds Rate',float('nan')):.2f}%", C["blue"],
+                  "Tasso di interesse fissato dalla Federal Reserve USA. "
+                  "Alti tassi = credito più costoso, freno all'economia e alle valutazioni azionarie. "
+                  "Bassi tassi = stimolo all'economia, favorevole per azioni e obbligazioni.")
     with k2:
         yc = latest.get("Yield Curve 10-2", float("nan"))
         kpi("Yield Curve 10Y-2Y",
             f"{yc:.2f}%  {'⚠️ Inverted' if yc<0 else '✅ Normal'}",
-            C["red"] if yc<0 else C["green"])
-    with k3: kpi("VIX", f"{latest.get('VIX',float('nan')):.1f}", C["orange"])
-    with k4: kpi("10Y Treasury", f"{latest.get('10Y Treasury',float('nan')):.2f}%", C["teal"])
+            C["red"] if yc<0 else C["green"],
+            "Differenza tra il rendimento del Treasury USA a 10 anni e quello a 2 anni. "
+            "Positivo (curva normale) = economia sana. "
+            "Negativo (curva invertita) = segnale storico di recessione imminente nei 6-18 mesi successivi.")
+    with k3: kpi("VIX", f"{latest.get('VIX',float('nan')):.1f}", C["orange"],
+                  "Indice di volatilità implicita del mercato azionario USA ('Fear Index'). "
+                  "Sotto 20 = mercato tranquillo. 20-30 = incertezza elevata. "
+                  "Sopra 30 = paura/panico. Picchi storici oltre 80 durante crisi severe.")
+    with k4: kpi("10Y Treasury", f"{latest.get('10Y Treasury',float('nan')):.2f}%", C["teal"],
+                  "Rendimento del titolo di stato USA a 10 anni. "
+                  "È il tasso 'risk-free' di riferimento globale. "
+                  "Alti rendimenti competono con le azioni, abbassandone le valutazioni. "
+                  "Influenza mutui, prestiti e costo del capitale per le aziende.")
 
+    # KPI aggiuntivi macro
+    k5, k6, _, _ = st.columns(4)
+    with k5:
+        cpi_val = latest.get("US CPI", float("nan"))
+        kpi("US CPI", f"{cpi_val:.1f}", C["purple"],
+             "Indice dei prezzi al consumo USA. Misura l'inflazione: quanto costano beni e servizi "
+             "rispetto a un anno fa. Un CPI in crescita accelerata spinge la Fed ad alzare i tassi.")
+    with k6:
+        eurusd = latest.get("EUR/USD", float("nan"))
+        kpi("EUR/USD", f"{eurusd:.4f}", C["pink"],
+             "Tasso di cambio Euro/Dollaro. "
+             "EUR/USD alto = euro forte, riduce il valore in EUR degli asset denominati in USD. "
+             "EUR/USD basso = dollaro forte, aumenta il valore in EUR degli asset USD.")
+
+    st.markdown("---")
     selected = st.multiselect("Select indicators",
                                options=macro.columns.tolist(),
                                default=macro.columns.tolist())
@@ -1422,12 +1468,14 @@ def main():
     st.sidebar.title("📈 Investment Dashboard")
     render_auth_sidebar(is_admin)
 
-    budget = st.sidebar.number_input(
+    if "budget" not in st.session_state:
+        st.session_state["budget"] = BUDGET_DEFAULT
+    st.sidebar.number_input(
         "Monthly Budget (€)", min_value=0.0,
-        value=float(st.session_state.get("budget", BUDGET_DEFAULT)),
-        step=50.0, format="%.0f"
+        step=50.0, format="%.0f",
+        key="budget"
     )
-    st.session_state["budget"] = budget
+    budget = st.session_state["budget"]
 
     st.sidebar.markdown("---")
     page = st.sidebar.radio("Navigate", [
