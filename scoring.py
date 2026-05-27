@@ -1,5 +1,6 @@
 """
-scoring.py — Score quantitativi per 5 categorie di asset.
+scoring.py — Score quantitativi per 5 categorie.
+Ogni score è normalizzato 0-1 (rank-based, robusto agli outlier).
 """
 import numpy as np
 import pandas as pd
@@ -23,17 +24,26 @@ def score_etf(prices: pd.DataFrame, names: dict) -> pd.DataFrame:
         m12 = (s.iloc[-1]/s.iloc[max(0,len(s)-252)]-1) if len(s)>252 else np.nan
         m6  = (s.iloc[-1]/s.iloc[max(0,len(s)-126)]-1) if len(s)>126 else np.nan
         m3  = (s.iloc[-1]/s.iloc[max(0,len(s)-63)]-1)  if len(s)>63  else np.nan
+        m1  = (s.iloc[-1]/s.iloc[max(0,len(s)-21)]-1)  if len(s)>21  else np.nan
         r1y = ret.iloc[-252:] if len(ret)>=252 else ret
         vol = r1y.std()*np.sqrt(252)
         sh  = (r1y.mean()*252)/vol if vol>0 else np.nan
-        rows.append({"Ticker":t,"Name":names.get(t,t),
-                     "Return 12M":m12,"Return 6M":m6,"Return 3M":m3,
-                     "Annual Vol":vol,"Sharpe 1Y":sh})
+        # Calmar
+        cum = (1+r1y).cumprod()
+        dd  = ((cum - cum.expanding().max()) / cum.expanding().max()).min()
+        calmar = (r1y.mean()*252)/abs(dd) if dd < 0 else np.nan
+        rows.append({
+            "Ticker": t, "Name": names.get(t,t),
+            "Return 12M": m12, "Return 6M": m6, "Return 3M": m3, "Return 1M": m1,
+            "Annual Vol": vol, "Sharpe 1Y": sh, "Calmar Ratio": calmar,
+        })
     df = pd.DataFrame(rows).set_index("Ticker")
     if df.empty: return df
-    df["Score"] = (0.30*rank_norm(df["Return 12M"]) + 0.20*rank_norm(df["Return 6M"]) +
-                   0.15*rank_norm(df["Return 3M"])   + 0.15*rank_norm(df["Annual Vol"],False) +
-                   0.20*rank_norm(df["Sharpe 1Y"]))
+    df["Score"] = (
+        0.25*rank_norm(df["Return 12M"]) + 0.20*rank_norm(df["Return 6M"]) +
+        0.15*rank_norm(df["Return 3M"])  + 0.10*rank_norm(df["Return 1M"]) +
+        0.15*rank_norm(df["Annual Vol"], False) + 0.15*rank_norm(df["Sharpe 1Y"])
+    )
     return df.sort_values("Score", ascending=False)
 
 
@@ -56,15 +66,23 @@ def score_dividend(prices, names, fund, divs) -> pd.DataFrame:
         fcf = np.nan
         if pd.notna(f.get("FCF")) and pd.notna(f.get("Market Cap")) and f["Market Cap"]>0:
             fcf = f["FCF"]/f["Market Cap"]
-        rows.append({"Ticker":t,"Name":names.get(t,str(f.get("Name",t))),
-                     "Dividend Yield":f.get("Dividend Yield"),"Payout Ratio":f.get("Payout Ratio"),
-                     "Div Growth 5Y":dg,"Consec. Years":dy,"FCF Yield":fcf,
-                     "Debt/Equity":f.get("Debt/Equity")})
+        rows.append({
+            "Ticker": t, "Name": names.get(t, str(f.get("Name",t))),
+            "Dividend Yield": f.get("Div Yield (TTM)") or f.get("Dividend Yield"),
+            "Payout Ratio":   f.get("Payout Ratio"),
+            "Div Growth 5Y":  dg,
+            "Consec. Years":  dy,
+            "FCF Yield":      fcf,
+            "Debt/Equity":    f.get("Debt/Equity"),
+            "Trailing P/E":   f.get("Trailing P/E"),
+        })
     df = pd.DataFrame(rows).set_index("Ticker")
     if df.empty: return df
-    df["Score"] = (0.25*rank_norm(df["Dividend Yield"]) + 0.20*rank_norm(df["Payout Ratio"],False) +
-                   0.20*rank_norm(df["Div Growth 5Y"])   + 0.15*rank_norm(df["Consec. Years"]) +
-                   0.10*rank_norm(df["FCF Yield"])        + 0.10*rank_norm(df["Debt/Equity"],False))
+    df["Score"] = (
+        0.25*rank_norm(df["Dividend Yield"])       + 0.20*rank_norm(df["Payout Ratio"],False) +
+        0.20*rank_norm(df["Div Growth 5Y"])         + 0.15*rank_norm(df["Consec. Years"]) +
+        0.10*rank_norm(df["FCF Yield"])             + 0.10*rank_norm(df["Debt/Equity"],False)
+    )
     return df.sort_values("Score", ascending=False)
 
 
@@ -78,15 +96,24 @@ def score_growth(prices, names, fund) -> pd.DataFrame:
         ups = np.nan
         if pd.notna(f.get("Analyst Target")) and s.iloc[-1]>0:
             ups = (f["Analyst Target"]-s.iloc[-1])/s.iloc[-1]
-        rows.append({"Ticker":t,"Name":names.get(t,str(f.get("Name",t))),
-                     "Revenue Growth":f.get("Revenue Growth"),"EPS Growth":f.get("EPS Growth"),
-                     "ROE":f.get("ROE"),"Profit Margin":f.get("Profit Margin"),
-                     "Momentum 6M":m6,"Analyst Upside":ups,"Forward P/E":f.get("Forward P/E")})
+        rows.append({
+            "Ticker": t, "Name": names.get(t, str(f.get("Name",t))),
+            "Revenue Growth":  f.get("Revenue Growth"),
+            "EPS Growth":      f.get("EPS Growth"),
+            "ROE":             f.get("ROE"),
+            "Profit Margin":   f.get("Profit Margin"),
+            "EV/EBITDA":       f.get("EV/EBITDA"),
+            "Forward P/E":     f.get("Forward P/E"),
+            "Momentum 6M":     m6,
+            "Analyst Upside":  ups,
+        })
     df = pd.DataFrame(rows).set_index("Ticker")
     if df.empty: return df
-    df["Score"] = (0.25*rank_norm(df["Revenue Growth"]) + 0.20*rank_norm(df["EPS Growth"]) +
-                   0.20*rank_norm(df["ROE"])             + 0.15*rank_norm(df["Profit Margin"]) +
-                   0.10*rank_norm(df["Momentum 6M"])     + 0.10*rank_norm(df["Analyst Upside"]))
+    df["Score"] = (
+        0.25*rank_norm(df["Revenue Growth"])  + 0.20*rank_norm(df["EPS Growth"]) +
+        0.20*rank_norm(df["ROE"])             + 0.15*rank_norm(df["Profit Margin"]) +
+        0.10*rank_norm(df["Momentum 6M"])     + 0.10*rank_norm(df["Analyst Upside"])
+    )
     return df.sort_values("Score", ascending=False)
 
 
@@ -101,23 +128,29 @@ def score_macro(prices, names) -> pd.DataFrame:
         r6  = ret.iloc[-126:] if len(ret)>=126 else ret
         vol = ret.iloc[-63:].std()*np.sqrt(252) if len(ret)>=63 else ret.std()*np.sqrt(252)
         sh  = (r6.mean()*252)/(r6.std()*np.sqrt(252)) if r6.std()>0 else np.nan
-        rows.append({"Ticker":t,"Name":names.get(t,t),
-                     "Momentum 3M":m3,"Momentum 1M":m1,"Sharpe 6M":sh,"Volatility 3M":vol})
+        rows.append({
+            "Ticker": t, "Name": names.get(t,t),
+            "Momentum 3M": m3, "Momentum 1M": m1,
+            "Sharpe 6M": sh,   "Volatility 3M": vol,
+        })
     df = pd.DataFrame(rows).set_index("Ticker")
     if df.empty: return df
-    df["Score"] = (0.35*rank_norm(df["Momentum 3M"])    + 0.25*rank_norm(df["Momentum 1M"]) +
-                   0.25*rank_norm(df["Sharpe 6M"])       + 0.15*rank_norm(df["Volatility 3M"],False))
+    df["Score"] = (
+        0.35*rank_norm(df["Momentum 3M"])    + 0.25*rank_norm(df["Momentum 1M"]) +
+        0.25*rank_norm(df["Sharpe 6M"])      + 0.15*rank_norm(df["Volatility 3M"],False)
+    )
     return df.sort_values("Score", ascending=False)
 
 
-def compute_scores(category: str, names: dict) -> pd.DataFrame:
-    """Entry point unificato — scarica prezzi e calcola score per categoria."""
+@st.cache_data(ttl=3600)
+def compute_scores(category: str, names_tuple: tuple) -> pd.DataFrame:
+    """Entry point con cache. names_tuple = tuple di (ticker, name)."""
+    names   = dict(names_tuple)
     tickers = tuple(sorted(names.keys()))
     prices  = fetch_prices(tickers, "3y")
     valid   = [t for t in tickers if t in prices.columns]
     if not valid:
         return pd.DataFrame()
-
     if category in ["UCITS Accumulation", "ETF Accumulation"]:
         return score_etf(prices[valid], names)
     elif category == "Dividend Stocks":
