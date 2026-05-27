@@ -1,4 +1,5 @@
 
+
 import json
 import time
 import secrets
@@ -787,10 +788,19 @@ def render_risk_charts(port_ret, total_value):
     section("Performance")
     m1,m2,m3,m4 = st.columns(4)
     with m1: kpi("Annual Return", f"{r95['annual_return']:+.1%}",
-                  C["green"] if r95["annual_return"]>=0 else C["red"])
-    with m2: kpi("Sharpe Ratio",     f"{r95['sharpe']:.2f}",       C["teal"])
-    with m3: kpi("Max Drawdown",      f"{r95['max_drawdown']:.1%}", C["red"])
-    with m4: kpi("Annual Volatility", f"{r95['volatility']:.1%}",   C["orange"])
+                  C["green"] if r95["annual_return"]>=0 else C["red"],
+                  "Rendimento annualizzato del portafoglio basato sulla storia degli ultimi 3 anni. "
+                  "Calcolato come CAGR (tasso di crescita annuale composto).")
+    with m2: kpi("Sharpe Ratio", f"{r95['sharpe']:.2f}", C["teal"],
+                  "Misura il rendimento ottenuto per ogni unità di rischio assunto. "
+                  "Sopra 1 = buono, sopra 2 = ottimo, sotto 0 = il rendimento non compensa il rischio.")
+    with m3: kpi("Max Drawdown", f"{r95['max_drawdown']:.1%}", C["red"],
+                  "La perdita massima subita dal portafoglio dal picco al minimo nel periodo analizzato. "
+                  "Es. -17% significa che il portafoglio ha perso il 17% dal suo valore massimo prima di risalire.")
+    with m4: kpi("Annual Volatility", f"{r95['volatility']:.1%}", C["orange"],
+                  "Misura quanto oscilla il valore del portafoglio nel corso dell'anno. "
+                  "Alta volatilità = maggiori fluttuazioni di prezzo. "
+                  "Calcolata come deviazione standard annualizzata dei rendimenti giornalieri.")
 
     section("Value at Risk")
     v1,v2,v3 = st.columns(3)
@@ -834,9 +844,9 @@ def render_risk_charts(port_ret, total_value):
             line_width=2, line_dash="dash",
             annotation_text=f"VaR 95%: {r95['var_hist_pct']:.2%}",
             annotation_font_color=C["orange"])
-        fig_dist.add_vline(x=-r99["var_hist_pct"]*100, line_color=C["red"],
+        fig_dist.add_vline(x=-r99_1d["var_hist_pct"]*100, line_color=C["red"],
             line_width=2, line_dash="dash",
-            annotation_text=f"VaR 99%: {r99['var_hist_pct']:.2%}",
+            annotation_text=f"VaR 99%: {r99_1d['var_hist_pct']:.2%}",
             annotation_font_color=C["red"])
         apply_layout(fig_dist, "Return Distribution + VaR", 380)
         st.plotly_chart(fig_dist, use_container_width=True)
