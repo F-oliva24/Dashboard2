@@ -1,4 +1,5 @@
 
+
 import json
 import time
 import secrets
@@ -35,6 +36,7 @@ GUEST_HOURS       = 1
 PORTFOLIO_CACHE   = Path("last_portfolio.json")
 BUY_PRICES_FILE   = Path("buy_prices.json")
 GUEST_PW_FILE     = Path("guest_pw.json")
+COMMISSIONS_FILE  = Path("commissions.json")
 
 # Known ISIN → Yahoo ticker + currency mapping
 ISIN_MAP = {
@@ -76,6 +78,25 @@ def save_buy_prices(prices: dict) -> None:
     """Salva prezzi di carico manuali su file JSON."""
     with open(BUY_PRICES_FILE, "w") as f:
         json.dump(prices, f, indent=2)
+
+def load_commissions() -> dict:
+    """
+    Carica numero di transazioni per ISIN.
+    Ogni transazione = 1€ (EUR) o 3€ (altra valuta).
+    """
+    if COMMISSIONS_FILE.exists():
+        with open(COMMISSIONS_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_commissions(data: dict) -> None:
+    with open(COMMISSIONS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def calc_commission_eur(isin: str, currency: str, n_transactions: int) -> float:
+    """Calcola commissione totale: 1€/transazione EUR, 3€/transazione altre valute."""
+    rate = 1.0 if currency == "EUR" else 3.0
+    return rate * n_transactions
 
 # Vivid color palette
 C = {
@@ -544,7 +565,8 @@ def parse_degiro_csv(uploaded_file) -> tuple[pd.DataFrame, list]:
 # ------------------------------------------------------------------ #
 
 def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
-                   fx_rates: dict, buy_prices: dict = None) -> tuple[pd.DataFrame, float]:
+                   fx_rates: dict, buy_prices: dict = None,
+                   commissions: dict = None) -> tuple[pd.DataFrame, float]:
     """
     Calcola metriche portafoglio.
     - buy_prices: dict {isin: prezzo_carico_manuale} — override manuale
@@ -574,8 +596,10 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
         buy_px      = float(buy_prices[isin]) if has_manual else degiro_px
         price_source= "Manual" if has_manual else "DEGIRO (fallback)"
 
-        # Commission: €1 for EUR positions, €3 for other currencies
-        commission_eur = 1.0 if deg_currency == "EUR" else 3.0
+        # Commission: €1/transaction EUR, €3/transaction other currencies
+        # n_transactions stored in commissions dict keyed by ISIN
+        n_tx = int(commissions.get(isin, 1)) if commissions else 1
+        commission_eur = calc_commission_eur(isin, deg_currency, n_tx)
 
         cost_orig = qty * buy_px
         val_orig  = qty * curr_px if curr_px else None
@@ -920,7 +944,38 @@ def page_portfolio(is_admin, budget):
                     st.session_state["buy_prices"] = buy_prices
                     save_buy_prices(buy_prices)
 
-    pivot, total_value = calc_portfolio(positions_df, current_prices, fx_rates, buy_prices)
+    # Load commissions (number of transactions per ISIN)
+    if "commissions" not in st.session_state:
+        st.session_state["commissions"] = load_commissions()
+    commissions = st.session_state["commissions"]
+
+    # Transactions editor
+    if is_admin:
+        section("Number of Transactions (for commission calculation)")
+        st.caption("Each transaction costs €1 (EUR) or €3 (other currencies). "
+                   "Enter how many times you bought each position.")
+        tx_cols = st.columns(min(len(positions_df), 3))
+        for i, (_, pos) in enumerate(positions_df.iterrows()):
+            isin     = str(pos.get("isin",""))
+            name     = str(pos.get("yf_name", pos.get("name","")))[:25]
+            currency = str(pos.get("degiro_currency", pos.get("currency","EUR")))
+            rate     = 1 if currency == "EUR" else 3
+            current_tx = int(commissions.get(isin, 1))
+            with tx_cols[i % len(tx_cols)]:
+                new_tx = st.number_input(
+                    f"{name} (€{rate}/tx)",
+                    min_value=1, max_value=100,
+                    value=current_tx, step=1,
+                    key=f"tx_{isin}",
+                    help=f"ISIN: {isin} — Total commission: €{rate * current_tx}"
+                )
+                if new_tx != current_tx:
+                    commissions[isin] = new_tx
+                    st.session_state["commissions"] = commissions
+                    save_commissions(commissions)
+
+    pivot, total_value = calc_portfolio(positions_df, current_prices, fx_rates,
+                                        buy_prices, commissions)
     total_cost       = pd.to_numeric(pivot["Cost (€)"],       errors="coerce").sum()
     total_commissions= pd.to_numeric(pivot["Commission (€)"], errors="coerce").sum()
     total_pl         = pd.to_numeric(pivot["P&L (€)"],        errors="coerce").sum()
@@ -929,16 +984,11 @@ def page_portfolio(is_admin, budget):
     # KPIs
     section("Overview")
     k1,k2,k3,k4 = st.columns(4)
-    with k1: kpi("Total Value",     f"€{total_value:,.0f}", C["blue"])
-    with k2: kpi("Unrealised P&L",  f"€{total_pl:+,.0f} ({total_pl_pct:+.1%})",
+    with k1: kpi("Total Value",           f"€{total_value:,.0f}",                         C["blue"])
+    with k2: kpi("P&L (net commissions)", f"€{total_pl:+,.0f} ({total_pl_pct:+.1%})",
                   C["green"] if total_pl>=0 else C["red"])
-    with k3: kpi("Positions",       str(len(pivot)), C["teal"])
-    with k4: kpi("Monthly Budget",  f"€{budget:,.0f}", C["purple"])
-
-    k5, k6, _, _ = st.columns(4)
-    with k5: kpi("Total Commissions", f"€{total_commissions:,.2f}", C["muted"])
-    with k6: kpi("P&L net of commissions", f"€{total_pl:+,.0f} ({total_pl_pct:+.1%})",
-                  C["green"] if total_pl>=0 else C["red"])
+    with k3: kpi("Total Commissions",     f"€{total_commissions:,.2f}",                   C["muted"])
+    with k4: kpi("Monthly Budget",        f"€{budget:,.0f}",                              C["purple"])
 
     # Positions table
     section("Positions")
