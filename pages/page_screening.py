@@ -1,6 +1,4 @@
-"""
-pages/page_screening.py — Asset Screening con score radar e bar chart.
-"""
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -46,7 +44,6 @@ def render_radar(df: pd.DataFrame, category: str, color: str) -> None:
             values.append(float(v) if pd.notna(v) else 0.0)
 
         # Normalizza 0-1 per ogni asse
-        col_vals = pd.to_numeric(df[axes_available].stack(), errors="coerce").dropna()
         norm = []
         for j, ax in enumerate(axes_available):
             col = pd.to_numeric(df[ax], errors="coerce").dropna()
@@ -57,13 +54,20 @@ def render_radar(df: pd.DataFrame, category: str, color: str) -> None:
         norm.append(norm[0])  # chiudi il poligono
         theta = axes_available + [axes_available[0]]
 
+        # Fix: fillcolor in rgba format, hovertemplate senza f-string
+        hex_color = CHART_COLORS[i % len(CHART_COLORS)]
+        r,g,b = int(hex_color[1:3],16), int(hex_color[3:5],16), int(hex_color[5:7],16)
+        fill_color = f"rgba({r},{g},{b},0.2)"
+        score_val = float(row.get("Score", 0)) if pd.notna(row.get("Score")) else 0.0
+        trace_name = f"{ticker} ({score_val:.2f})"
+
         fig.add_trace(go.Scatterpolar(
             r=norm, theta=theta,
             fill="toself",
-            fillcolor=CHART_COLORS[i % len(CHART_COLORS)] + "33",
-            line=dict(color=CHART_COLORS[i % len(CHART_COLORS)], width=2),
-            name=f"{ticker} ({row.get('Score',0):.2f})",
-            hovertemplate=f"<b>{ticker}</b><br>%{{theta}}: %{{r:.2f}}<extra></extra>"
+            fillcolor=fill_color,
+            line=dict(color=hex_color, width=2),
+            name=trace_name,
+            hovertemplate="<b>" + ticker + "</b><br>%{theta}: %{r:.2f}<extra></extra>"
         ))
 
     fig.update_layout(
