@@ -574,9 +574,17 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
         buy_px      = float(buy_prices[isin]) if has_manual else degiro_px
         price_source= "Manual" if has_manual else "DEGIRO (fallback)"
 
+        # Commission: €1 for EUR positions, €3 for other currencies
+        commission_eur = 1.0 if deg_currency == "EUR" else 3.0
+
         cost_orig = qty * buy_px
         val_orig  = qty * curr_px if curr_px else None
-        pl_orig   = (val_orig - cost_orig) if val_orig is not None else None
+        # P&L in original currency (before commission)
+        pl_orig_pre = (val_orig - cost_orig) if val_orig is not None else None
+        # Commission converted back to original currency for display
+        commission_orig = commission_eur / fx if fx > 0 else commission_eur
+        # P&L net of commission in original currency
+        pl_orig   = (pl_orig_pre - commission_orig) if pl_orig_pre is not None else None
         pl_pct    = (pl_orig / cost_orig) if (pl_orig is not None and cost_orig > 0) else None
 
         val_eur  = val_orig * fx if val_orig is not None else cost_orig * fx
@@ -598,6 +606,7 @@ def calc_portfolio(positions_df: pd.DataFrame, current_prices: dict,
             "Value (orig)":       f"{val_orig:,.2f} {currency}" if val_orig else "N/A",
             "P&L (orig)":         f"{pl_orig:+,.2f} {currency}" if pl_orig is not None else "N/A",
             "P&L (%)":            pl_pct,
+            "Commission (€)":     commission_eur,
             "Value (€) YF":       round(val_eur, 2),
             "Value (€) DEGIRO":   round(float(deg_val_eur), 2) if pd.notna(deg_val_eur) else None,
             "P&L (€)":            round(pl_eur, 2) if pl_eur is not None else None,
@@ -912,9 +921,10 @@ def page_portfolio(is_admin, budget):
                     save_buy_prices(buy_prices)
 
     pivot, total_value = calc_portfolio(positions_df, current_prices, fx_rates, buy_prices)
-    total_cost = pd.to_numeric(pivot["Cost (€)"], errors="coerce").sum()
-    total_pl   = pd.to_numeric(pivot["P&L (€)"],  errors="coerce").sum()
-    total_pl_pct = total_pl / total_cost if total_cost > 0 else 0
+    total_cost       = pd.to_numeric(pivot["Cost (€)"],       errors="coerce").sum()
+    total_commissions= pd.to_numeric(pivot["Commission (€)"], errors="coerce").sum()
+    total_pl         = pd.to_numeric(pivot["P&L (€)"],        errors="coerce").sum()
+    total_pl_pct     = total_pl / total_cost if total_cost > 0 else 0
 
     # KPIs
     section("Overview")
@@ -924,6 +934,11 @@ def page_portfolio(is_admin, budget):
                   C["green"] if total_pl>=0 else C["red"])
     with k3: kpi("Positions",       str(len(pivot)), C["teal"])
     with k4: kpi("Monthly Budget",  f"€{budget:,.0f}", C["purple"])
+
+    k5, k6, _, _ = st.columns(4)
+    with k5: kpi("Total Commissions", f"€{total_commissions:,.2f}", C["muted"])
+    with k6: kpi("P&L net of commissions", f"€{total_pl:+,.0f} ({total_pl_pct:+.1%})",
+                  C["green"] if total_pl>=0 else C["red"])
 
     # Positions table
     section("Positions")
@@ -1165,7 +1180,7 @@ def page_scenario(budget):
     # Allocation pie
     col_pie, col_alloc = st.columns(2)
     with col_pie:
-        vals = pd.to_numeric(scen_pivot["Value (€)"], errors="coerce").fillna(0)
+        vals = pd.to_numeric(scen_pivot["Value (€) YF"], errors="coerce").fillna(0)
         fig_pie = go.Figure(go.Pie(
             labels=scen_pivot.index.tolist(), values=vals.tolist(), hole=0.45,
             textinfo="label+percent", textfont=dict(color=C["text"]),
@@ -1200,8 +1215,8 @@ def page_scenario(budget):
     # Risk analysis
     valid_scen = [t for t in scen_tickers if t in prices_scen.columns]
     if valid_scen:
-        w_raw  = {t: float(scen_pivot.loc[t,"Value (€)"]) for t in valid_scen
-                  if t in scen_pivot.index and pd.notna(scen_pivot.loc[t,"Value (€)"])}
+        w_raw  = {t: float(scen_pivot.loc[t,"Value (€) YF"]) for t in valid_scen
+                  if t in scen_pivot.index and pd.notna(scen_pivot.loc[t,"Value (€) YF"])}
         w_tot  = sum(w_raw.values())
         w_norm = {t:v/w_tot for t,v in w_raw.items()} if w_tot>0 else {}
         if w_norm:
@@ -1221,8 +1236,8 @@ def page_scenario(budget):
 
                 real_valid = [t for t in real_tickers if t in real_prices.columns]
                 if real_valid:
-                    rw_raw  = {t: float(real_pivot.loc[t,"Value (€)"]) for t in real_valid
-                               if t in real_pivot.index and pd.notna(real_pivot.loc[t,"Value (€)"])}
+                    rw_raw  = {t: float(real_pivot.loc[t,"Value (€) YF"]) for t in real_valid
+                               if t in real_pivot.index and pd.notna(real_pivot.loc[t,"Value (€) YF"])}
                     rw_tot  = sum(rw_raw.values())
                     rw_norm = {t:v/rw_tot for t,v in rw_raw.items()} if rw_tot>0 else {}
                     if rw_norm:
