@@ -309,10 +309,9 @@ def render(is_admin: bool, budget: float) -> None:
                 qty_sug   = buy_eur / price_eur if (price_eur and price_eur > 0) else None
 
                 # Commissione
-                from config import ISIN_MAP
-                isin = str(positions_df[positions_df["ticker"]==ticker]["isin"].values[0]
-                           if not positions_df[positions_df["ticker"]==ticker].empty else "")
-                mapped_cur = ISIN_MAP.get(isin, {}).get("currency", cur)
+                isin_rows  = positions_df[positions_df["ticker"] == ticker]
+                isin_val   = str(isin_rows["isin"].values[0]) if not isin_rows.empty else ""
+                mapped_cur = ISIN_MAP.get(isin_val, {}).get("currency", cur)
                 comm = 1.0 if mapped_cur == "EUR" else 3.0
 
                 rebal_rows.append({
