@@ -970,8 +970,7 @@ def page_portfolio(is_admin, budget):
                     f"{name} ({currency})",
                     min_value=0.0, value=current_bp,
                     step=0.01, format="%.4f",
-                    key=f"bp_{isin}",
-                    help=f"ISIN: {isin}"
+                    key=f"bp_{isin}"
                 )
                 if new_bp != current_bp:
                     buy_prices[isin] = new_bp
@@ -1000,8 +999,7 @@ def page_portfolio(is_admin, budget):
                     f"{name} (€{rate}/tx)",
                     min_value=1, max_value=100,
                     value=current_tx, step=1,
-                    key=f"tx_{isin}",
-                    help=f"ISIN: {isin} — Total commission: €{rate * current_tx}"
+                    key=f"tx_{isin}"
                 )
                 if new_tx != current_tx:
                     commissions[isin] = new_tx
