@@ -1,4 +1,6 @@
 
+"""
+
 import json
 import time
 import secrets
@@ -267,19 +269,22 @@ def apply_layout(fig, title="", height=380):
 
 def kpi(label, value, color, tooltip=None):
     """
-    KPI card. If tooltip is provided, shows a Streamlit native tooltip
-    via st.metric workaround using help= parameter.
+    KPI card usando st.metric con help= per tooltip nativo (icona ? hover).
+    Il colore viene applicato via CSS sulla metrica.
     """
-    if tooltip:
-        # Use columns trick: markdown card + hidden metric for tooltip
-        st.markdown(f'<div class="kpi-box"><div class="kpi-label">{label}</div>'
-                    f'<div class="kpi-value" style="color:{color}">{value}</div></div>',
-                    unsafe_allow_html=True)
-        st.caption(f"ℹ️ {tooltip}")
-    else:
-        st.markdown(f'<div class="kpi-box"><div class="kpi-label">{label}</div>'
-                    f'<div class="kpi-value" style="color:{color}">{value}</div></div>',
-                    unsafe_allow_html=True)
+    # st.metric ha il parametro help= che mostra un tooltip nativo con icona ?
+    st.metric(
+        label=label,
+        value=value,
+        help=tooltip or "",
+        delta=None,
+    )
+    # Override colore con CSS inline
+    st.markdown(
+        f'<style>[data-testid="stMetric"] [data-testid="stMetricValue"] p {{' +
+        f'color: {color} !important; font-size: 24px !important; font-weight: 800 !important;}}</style>',
+        unsafe_allow_html=True
+    )
 
 def section(title):
     st.markdown(f'<div class="section-title">{title}</div>', unsafe_allow_html=True)
@@ -779,9 +784,11 @@ def score_macro(prices, names):
 # ------------------------------------------------------------------ #
 
 def render_risk_charts(port_ret, total_value):
+    r99_1d  = calc_risk(port_ret, total_value, 0.99, 1)
+    r99_20d = calc_risk(port_ret, total_value, 0.99, 20)
+    r95_20d = calc_risk(port_ret, total_value, 0.95, 20)
+    # r95 used for performance metrics (sharpe etc uses 1d internally)
     r95  = calc_risk(port_ret, total_value, 0.95, 1)
-    r99  = calc_risk(port_ret, total_value, 0.99, 1)
-    r95_5= calc_risk(port_ret, total_value, 0.95, 5)
 
     section("Performance")
     m1,m2,m3,m4 = st.columns(4)
