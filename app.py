@@ -34,6 +34,7 @@ page = st.sidebar.radio("Navigate", [
     "💼 My Portfolio",
     "🔬 Scenario Builder",
     "🔍 Screening",
+    "📊 History & Watchlist",
     "🌍 Macro",
 ])
 
@@ -48,6 +49,10 @@ elif page == "🔬 Scenario Builder":
 
 elif page == "🔍 Screening":
     from pages.page_screening import render
+    render(is_admin)
+
+elif page == "📊 History & Watchlist":
+    from pages.page_history import render
     render(is_admin)
 
 elif page == "🌍 Macro":
