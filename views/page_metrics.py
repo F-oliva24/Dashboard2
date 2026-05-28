@@ -1,11 +1,9 @@
-"""
-pages/page_metrics.py — Layer Metrics.
-Portfolio level + asset level. Struttura aperta per nuovi dati futuri.
-"""
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from pathlib import Path
 
 from config import C, CHART_COLORS, ISIN_MAP
 from data import (fetch_current_prices, fetch_fx_rates, fetch_prices,
@@ -21,7 +19,22 @@ def render(budget: float) -> None:
     st.caption("Portfolio-level and asset-level metrics. "
                "New data sources (dividends, earnings) integrate automatically when available.")
 
-    positions_df = st.session_state.get("positions_df") or load_cached_portfolio()
+    # Load positions — robusto, mai crashare
+    positions_df = st.session_state.get("positions_df")
+    if positions_df is None:
+        import json
+        cache_file = Path("last_portfolio.json")
+        if cache_file.exists():
+            try:
+                with open(cache_file) as f:
+                    raw = json.load(f)
+                if isinstance(raw, list) and raw:
+                    df_tmp = pd.DataFrame(raw)
+                    if "ticker" in df_tmp.columns:
+                        positions_df = df_tmp
+                        st.session_state["positions_df"] = positions_df
+            except:
+                pass
     if positions_df is None or positions_df.empty:
         st.markdown('<div class="upload-hint">📂 Upload DEGIRO CSV in My Portfolio first.</div>',
                     unsafe_allow_html=True)
