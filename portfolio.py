@@ -1,6 +1,4 @@
-"""
-portfolio.py — Parsing CSV DEGIRO, calcolo metriche, commissioni, buy prices.
-"""
+
 import json
 import pandas as pd
 import numpy as np
@@ -34,12 +32,18 @@ def save_commissions(data: dict) -> None:
         json.dump(data, f, indent=2)
 
 def load_cached_portfolio() -> pd.DataFrame | None:
-    if PORTFOLIO_CACHE.exists():
-        try:
-            return pd.read_json(PORTFOLIO_CACHE, orient="records")
-        except:
+    if not PORTFOLIO_CACHE.exists():
+        return None
+    try:
+        text = PORTFOLIO_CACHE.read_text().strip()
+        if not text or text in ("[]", "null", "{}"):
             return None
-    return None
+        df = pd.read_json(PORTFOLIO_CACHE, orient="records")
+        if df.empty:
+            return None
+        return df
+    except Exception:
+        return None
 
 def save_cached_portfolio(df: pd.DataFrame) -> None:
     df.to_json(PORTFOLIO_CACHE, orient="records")
