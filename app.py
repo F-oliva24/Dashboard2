@@ -1,6 +1,4 @@
-"""
-app.py — Entry point. Routing e sidebar.
-"""
+
 import streamlit as st
 from config import CSS, BUDGET_DEFAULT, C
 from auth import check_auth, render_login, render_auth_sidebar
@@ -39,23 +37,23 @@ page = st.sidebar.radio("Navigate", [
 ])
 
 if page == "💼 My Portfolio":
-    from pages.page_portfolio import render
+    from views.page_portfolio import render
     render(is_admin, budget)
 
 elif page == "📊 Metrics":
-    from pages.page_metrics import render
+    from views.page_metrics import render
     render(budget)
 
 elif page == "🔍 Screening":
-    from pages.page_screening import render
+    from views.page_screening import render
     render(is_admin)
 
 elif page == "🔬 Scenario Builder":
-    from pages.page_scenario import render
+    from views.page_scenario import render
     render(budget)
 
 elif page == "🌍 Macro & News":
-    from pages.page_macro import render
+    from views.page_macro import render
     render()
 
 st.sidebar.markdown("---")
