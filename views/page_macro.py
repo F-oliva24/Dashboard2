@@ -1,6 +1,4 @@
-"""
-pages/page_macro.py — Macro indicators + News per portafoglio e watchlist.
-"""
+
 import json
 from pathlib import Path
 
@@ -125,7 +123,22 @@ def render() -> None:
 
         # Raccogli ticker da portafoglio + watchlist
         portfolio_tickers = []
-        positions_df = st.session_state.get("positions_df") or load_cached_portfolio()
+        # Load positions — robusto, mai crashare
+    positions_df = st.session_state.get("positions_df")
+    if positions_df is None:
+        import json
+        cache_file = Path("last_portfolio.json")
+        if cache_file.exists():
+            try:
+                with open(cache_file) as f:
+                    raw = json.load(f)
+                if isinstance(raw, list) and raw:
+                    df_tmp = pd.DataFrame(raw)
+                    if "ticker" in df_tmp.columns:
+                        positions_df = df_tmp
+                        st.session_state["positions_df"] = positions_df
+            except:
+                pass
         if positions_df is not None and not positions_df.empty:
             portfolio_tickers = [t for t in positions_df["ticker"].dropna().unique() if t]
 
