@@ -67,33 +67,58 @@ def render(budget: float) -> None:
 
     # Performance
     if port_ret is not None and len(port_ret) > 20:
-        r = calc_risk(port_ret, total_value, 0.95, 1)
-        col1,col2,col3,col4,col5,col6 = st.columns(6)
-        with col1: kpi("Total Value",    f"€{total_value:,.0f}", C["blue"])
-        with col2: kpi("Total P&L",
-                        f"€{total_pl:+,.0f}",
-                        C["green"] if total_pl>=0 else C["red"],
-                        "P&L non realizzato netto commissioni.")
-        with col3: kpi("P&L %",
-                        f"{total_pl/total_cost:+.2%}" if total_cost>0 else "—",
-                        C["green"] if total_pl>=0 else C["red"])
-        with col4: kpi("Annual Return",  f"{r['annual_return']:+.1%}", C["teal"],
-                        "CAGR su 3 anni di storia prezzi.")
-        with col5: kpi("Sharpe",         f"{r['sharpe']:.2f}", C["orange"],
-                        "Rendimento per unità di rischio.")
-        with col6: kpi("Max Drawdown",   f"{r['max_drawdown']:.1%}", C["red"],
-                        "Perdita massima dal picco nel periodo analizzato.")
+        r     = calc_risk(port_ret, total_value, 0.95, 1)
+        r99_1 = calc_risk(port_ret, total_value, 0.99, 1)
+        r99_20= calc_risk(port_ret, total_value, 0.99, 20)
 
-        # Rendimenti per periodo
+        # Row 1: valore e P&L
+        k1,k2,k3 = st.columns(3)
+        with k1: kpi("Total Value",    f"€{total_value:,.0f}", C["blue"])
+        with k2: kpi("Total P&L",
+                      f"€{total_pl:+,.0f}",
+                      C["green"] if total_pl>=0 else C["red"],
+                      "P&L non realizzato netto commissioni.")
+        with k3: kpi("P&L %",
+                      f"{total_pl/total_cost:+.2%}" if total_cost>0 else "—",
+                      C["green"] if total_pl>=0 else C["red"])
+
+        # Row 2: performance
+        k4,k5,k6 = st.columns(3)
+        with k4: kpi("Annual Return",  f"{r['annual_return']:+.1%}", C["teal"],
+                      "CAGR su 3 anni di storia prezzi.")
+        with k5: kpi("Sharpe Ratio",   f"{r['sharpe']:.2f}", C["orange"],
+                      "Rendimento per unità di rischio. >1 buono, >2 ottimo.")
+        with k6: kpi("Max Drawdown",   f"{r['max_drawdown']:.1%}", C["red"],
+                      "Perdita massima dal picco al minimo nel periodo analizzato.")
+
+        # Row 3: VaR portfolio level 99%
+        section("Value at Risk — Portfolio Level (99%)")
+        v1,v2 = st.columns(2)
+        with v1: kpi("VaR 99% — 1 day",
+                      f"€{r99_1['var_hist_eur']:,.0f}  ({r99_1['var_hist_pct']:.2%})",
+                      C["red"],
+                      f"Con il 99% di probabilità la perdita giornaliera non supererà "
+                      f"€{r99_1['var_hist_eur']:,.0f} ({r99_1['var_hist_pct']:.2%} del portafoglio).")
+        with v2: kpi("VaR 99% — 20 days",
+                      f"€{r99_20['var_hist_eur']:,.0f}  ({r99_20['var_hist_pct']:.2%})",
+                      C["red"],
+                      f"Con il 99% di probabilità la perdita mensile (~20gg) non supererà "
+                      f"€{r99_20['var_hist_eur']:,.0f} ({r99_20['var_hist_pct']:.2%}).")
+
+        # Returns by period
         section("Returns by Period")
-        periods = {
-            "1M": 21, "3M": 63, "6M": 126, "1Y": 252, "2Y": 504, "3Y": 756
-        }
-        ret_cols = st.columns(len(periods))
-        for (label, days), col in zip(periods.items(), ret_cols):
+        periods = {"1M": 21, "3M": 63, "6M": 126, "1Y": 252, "2Y": 504, "3Y": 756}
+        ret_vals = {}
+        for label, days in periods.items():
             if len(port_ret) > days:
-                ret_period = (1+port_ret.iloc[-days:]).prod() - 1
-                col.metric(label, f"{ret_period:+.2%}")
+                ret_vals[label] = (1+port_ret.iloc[-days:]).prod() - 1
+
+        if ret_vals:
+            r_cols = st.columns(len(ret_vals))
+            for (label, val), col in zip(ret_vals.items(), r_cols):
+                color = C["green"] if val >= 0 else C["red"]
+                with col:
+                    kpi(label, f"{val:+.2%}", color)
 
     # Dividendi portafoglio (solo stock distributrici)
     section("Income & Dividends")
@@ -186,7 +211,10 @@ def render(budget: float) -> None:
         if len(ret) < 20:
             continue
 
-        r_asset  = calc_risk(ret, 1.0, 0.95, 1)  # normalized
+        r95_1d  = calc_risk(ret, 1.0, 0.95, 1)
+        r99_1d  = calc_risk(ret, 1.0, 0.99, 1)
+        r99_20d = calc_risk(ret, 1.0, 0.99, 20)
+
         isin_rows = positions_df[positions_df["ticker"]==ticker]
         qty       = float(isin_rows["qty"].values[0]) if not isin_rows.empty else 0
         cp        = curr_px.get(ticker)
@@ -196,21 +224,24 @@ def render(budget: float) -> None:
         val_eur   = qty*cp*fx if cp else 0
         weight    = val_eur/total_value if total_value>0 else 0
 
-        # Fondamentali se disponibili
+        # VaR in EUR reale (pesato per valore posizione)
+        var99_1d_eur  = r99_1d["var_hist_pct"]  * val_eur
+        var99_20d_eur = r99_20d["var_hist_pct"] * val_eur
+
         f_row = fund.loc[ticker] if ticker in fund.index else pd.Series(dtype=float)
 
         asset_rows[ticker] = {
-            "Weight":          f"{weight:.1%}",
-            "Return 1Y":       f"{r_asset['annual_return']:+.1%}",
-            "Volatility":      f"{r_asset['volatility']:.1%}",
-            "Sharpe":          f"{r_asset['sharpe']:.2f}" if pd.notna(r_asset['sharpe']) else "—",
-            "Max DD":          f"{r_asset['max_drawdown']:.1%}",
-            "VaR 95% 1d":      f"{r_asset['var_hist_pct']:.2%}",
-            # Fondamentali (None-safe)
-            "Beta":            f"{f_row.get('Beta'):.2f}" if pd.notna(f_row.get('Beta')) else "—",
-            "Forward P/E":     f"{f_row.get('Forward P/E'):.1f}" if pd.notna(f_row.get('Forward P/E')) else "—",
-            "Div Yield":       f"{f_row.get('Div Yield (TTM)'):.2%}" if pd.notna(f_row.get('Div Yield (TTM)')) else "—",
-            "Revenue Growth":  f"{f_row.get('Revenue Growth'):.1%}" if pd.notna(f_row.get('Revenue Growth')) else "—",
+            "Weight":           f"{weight:.1%}",
+            "Return 1Y":        f"{r95_1d['annual_return']:+.1%}",
+            "Volatility":       f"{r95_1d['volatility']:.1%}",
+            "Sharpe":           f"{r95_1d['sharpe']:.2f}" if pd.notna(r95_1d['sharpe']) else "—",
+            "Max DD":           f"{r95_1d['max_drawdown']:.1%}",
+            "VaR 99% 1d":       f"€{var99_1d_eur:,.0f} ({r99_1d['var_hist_pct']:.2%})",
+            "VaR 99% 20d":      f"€{var99_20d_eur:,.0f} ({r99_20d['var_hist_pct']:.2%})",
+            "Beta":             f"{f_row.get('Beta'):.2f}" if pd.notna(f_row.get('Beta')) else "—",
+            "Forward P/E":      f"{f_row.get('Forward P/E'):.1f}" if pd.notna(f_row.get('Forward P/E')) else "—",
+            "Div Yield":        f"{f_row.get('Div Yield (TTM)'):.2%}" if pd.notna(f_row.get('Div Yield (TTM)')) else "—",
+            "Revenue Growth":   f"{f_row.get('Revenue Growth'):.1%}" if pd.notna(f_row.get('Revenue Growth')) else "—",
         }
 
     if asset_rows:
@@ -223,8 +254,7 @@ def render(budget: float) -> None:
                 "Sharpe":     True,
                 "Max DD":     False,
                 "Volatility": False,
-            },
-            fmt_cols={}
+            }
         )
 
     # Contribution to portfolio risk
