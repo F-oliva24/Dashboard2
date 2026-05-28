@@ -32,21 +32,52 @@ def save_commissions(data: dict) -> None:
         json.dump(data, f, indent=2)
 
 def load_cached_portfolio() -> pd.DataFrame | None:
+    """
+    Carica l'ultimo CSV parsato dalla cache.
+    Gestisce qualsiasi formato JSON salvato in precedenza.
+    """
     if not PORTFOLIO_CACHE.exists():
         return None
     try:
-        text = PORTFOLIO_CACHE.read_text().strip()
-        if not text or text in ("[]", "null", "{}"):
+        import json
+        with open(PORTFOLIO_CACHE) as f:
+            raw = f.read().strip()
+        if not raw:
             return None
-        df = pd.read_json(PORTFOLIO_CACHE, orient="records")
+        data = json.loads(raw)
+        # Gestisci sia lista che dict
+        if isinstance(data, list):
+            if not data:
+                return None
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            # Formato orient="records" nested o orient="index"
+            try:
+                df = pd.DataFrame.from_dict(data, orient="index")
+            except:
+                df = pd.DataFrame([data])
+        else:
+            return None
+        # Assicura colonne minime necessarie
+        if "qty" not in df.columns and "Qty" in df.columns:
+            df = df.rename(columns={"Qty": "qty"})
         if df.empty:
             return None
         return df
     except Exception:
+        # JSON corrotto o formato sconosciuto — cancella e riparte
+        try:
+            PORTFOLIO_CACHE.unlink()
+        except:
+            pass
         return None
 
 def save_cached_portfolio(df: pd.DataFrame) -> None:
-    df.to_json(PORTFOLIO_CACHE, orient="records")
+    """Salva sempre come lista JSON — formato più compatibile."""
+    import json
+    records = df.to_dict(orient="records")
+    with open(PORTFOLIO_CACHE, "w") as f:
+        json.dump(records, f, indent=2, default=str)
 
 def commission_rate(currency: str) -> float:
     """€1 per transazione EUR, €3 per altre valute."""
